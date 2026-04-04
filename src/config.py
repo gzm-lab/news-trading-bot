@@ -9,7 +9,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class BrokerSettings(BaseSettings):
     """Alpaca / IBKR broker configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="ALPACA_")
+    model_config = SettingsConfigDict(
+        env_prefix="ALPACA_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     api_key: str = ""
     secret_key: str = ""

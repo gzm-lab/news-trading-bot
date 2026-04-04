@@ -4,10 +4,71 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 
 import structlog
 from dotenv import load_dotenv
+
+# NYSE timezone and schedule
+_ET = ZoneInfo("America/New_York")
+_NYSE_OPEN = (9, 30)   # 09:30 ET
+_NYSE_CLOSE = (16, 0)  # 16:00 ET
+_PRE_MARKET_BUFFER = 15  # start 15 min before open (news fetch)
+
+
+def _seconds_until_market(now_et: datetime | None = None) -> int:
+    """Return 0 if market is open (or within pre-market buffer), else
+    seconds until next trading window.  Handles weekends and holidays
+    using a simple weekday check (no holiday calendar — Alpaca's
+    is_market_open() handles those once we're close)."""
+    if now_et is None:
+        now_et = datetime.now(_ET)
+
+    wd = now_et.weekday()  # Mon=0 … Sun=6
+    t = now_et.time()
+    from datetime import time as dt_time  # noqa: F811
+
+    open_t = dt_time(_NYSE_OPEN[0], _NYSE_OPEN[1] - _PRE_MARKET_BUFFER)
+    close_t = dt_time(_NYSE_CLOSE[0], _NYSE_CLOSE[1])
+
+    # Weekday during trading window
+    if wd < 5 and open_t <= t <= close_t:
+        return 0
+
+    # Find next trading day open
+    if wd < 5 and t < open_t:
+        # Today, before market open
+        next_open = now_et.replace(
+            hour=_NYSE_OPEN[0], minute=_NYSE_OPEN[1] - _PRE_MARKET_BUFFER,
+            second=0, microsecond=0,
+        )
+    elif wd == 4 and t > close_t:
+        # Friday after close → Monday
+        next_open = (now_et + timedelta(days=3)).replace(
+            hour=_NYSE_OPEN[0], minute=_NYSE_OPEN[1] - _PRE_MARKET_BUFFER,
+            second=0, microsecond=0,
+        )
+    elif wd == 5:
+        # Saturday → Monday
+        next_open = (now_et + timedelta(days=2)).replace(
+            hour=_NYSE_OPEN[0], minute=_NYSE_OPEN[1] - _PRE_MARKET_BUFFER,
+            second=0, microsecond=0,
+        )
+    elif wd == 6:
+        # Sunday → Monday
+        next_open = (now_et + timedelta(days=1)).replace(
+            hour=_NYSE_OPEN[0], minute=_NYSE_OPEN[1] - _PRE_MARKET_BUFFER,
+            second=0, microsecond=0,
+        )
+    else:
+        # Weekday after close → next day
+        next_open = (now_et + timedelta(days=1)).replace(
+            hour=_NYSE_OPEN[0], minute=_NYSE_OPEN[1] - _PRE_MARKET_BUFFER,
+            second=0, microsecond=0,
+        )
+
+    return max(1, int((next_open - now_et).total_seconds()))
 
 from src.config import Settings
 from src.broker.alpaca_broker import AlpacaBroker
@@ -106,10 +167,26 @@ class TradingBot:
 
         while self._running:
             try:
-                # Check market hours
+                # ── Fast local check: skip weekends / off-hours ──
+                wait = _seconds_until_market()
+                if wait > 0:
+                    next_open = datetime.now(_ET) + timedelta(seconds=wait)
+                    log.info(
+                        "bot.market_closed.sleeping",
+                        sleep_seconds=wait,
+                        next_open_et=next_open.strftime("%a %H:%M ET"),
+                    )
+                    # Sleep in chunks so we can still be interrupted
+                    while wait > 0 and self._running:
+                        chunk = min(wait, 300)  # wake every 5 min max
+                        await asyncio.sleep(chunk)
+                        wait -= chunk
+                    continue
+
+                # ── Double-check with Alpaca (handles holidays) ──
                 if not await self._broker.is_market_open():
-                    log.info("bot.market_closed")
-                    await asyncio.sleep(60)
+                    log.info("bot.market_closed.holiday")
+                    await asyncio.sleep(300)
                     continue
 
                 await self._cycle()

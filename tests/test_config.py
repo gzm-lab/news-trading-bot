@@ -16,8 +16,10 @@ from src.config import (
 
 
 class TestBrokerSettings:
-    def test_defaults(self):
-        cfg = BrokerSettings()
+    def test_defaults(self, monkeypatch):
+        monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+        monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+        cfg = BrokerSettings(_env_file=None)
         assert cfg.api_key == ""
         assert cfg.secret_key == ""
         assert "paper" in cfg.base_url
