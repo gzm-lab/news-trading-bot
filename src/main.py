@@ -12,63 +12,74 @@ from dotenv import load_dotenv
 
 # NYSE timezone and schedule
 _ET = ZoneInfo("America/New_York")
-_NYSE_OPEN = (9, 30)   # 09:30 ET
-_NYSE_CLOSE = (16, 0)  # 16:00 ET
-_PRE_MARKET_BUFFER = 15  # start 15 min before open (news fetch)
+_NYSE_OPEN  = (9, 30)   # 09:30 ET — real market open
+_NYSE_CLOSE = (16, 0)   # 16:00 ET
+_PRE_MARKET_START = (4, 0)   # 04:00 ET — start news/signal collection
+_PRE_MARKET_STOP  = (9, 30)  # 09:30 ET — hand off to live trading
 
 
-def _seconds_until_market(now_et: datetime | None = None) -> int:
-    """Return 0 if market is open (or within pre-market buffer), else
-    seconds until next trading window.  Handles weekends and holidays
-    using a simple weekday check (no holiday calendar — Alpaca's
-    is_market_open() handles those once we're close)."""
+def _market_phase(now_et: datetime | None = None) -> str:
+    """Return the current market phase:
+      'closed'     — weekend / off-hours (sleep until 04:00 ET next weekday)
+      'premarket'  — 04:00–09:30 ET weekdays (news fetch + signal warmup, no orders)
+      'open'       — 09:30–16:00 ET weekdays (full trading)
+    """
     if now_et is None:
         now_et = datetime.now(_ET)
 
-    wd = now_et.weekday()  # Mon=0 … Sun=6
-    t = now_et.time()
-    from datetime import time as dt_time  # noqa: F811
+    from datetime import time as dt_time
+    wd = now_et.weekday()   # Mon=0 … Sun=6
+    t  = now_et.time()
 
-    open_t = dt_time(_NYSE_OPEN[0], _NYSE_OPEN[1] - _PRE_MARKET_BUFFER)
-    close_t = dt_time(_NYSE_CLOSE[0], _NYSE_CLOSE[1])
+    pre_t  = dt_time(*_PRE_MARKET_START)
+    open_t = dt_time(*_NYSE_OPEN)
+    close_t = dt_time(*_NYSE_CLOSE)
 
-    # Weekday during trading window
-    if wd < 5 and open_t <= t <= close_t:
+    if wd >= 5:
+        return "closed"
+    if t < pre_t or t >= close_t:
+        return "closed"
+    if pre_t <= t < open_t:
+        return "premarket"
+    return "open"
+
+
+def _seconds_until_active(now_et: datetime | None = None) -> int:
+    """Seconds until the next active window starts (pre-market 04:00 ET).
+    Returns 0 if already in premarket or open phase."""
+    if now_et is None:
+        now_et = datetime.now(_ET)
+
+    phase = _market_phase(now_et)
+    if phase in ("premarket", "open"):
         return 0
 
-    # Find next trading day open
-    if wd < 5 and t < open_t:
-        # Today, before market open
-        next_open = now_et.replace(
-            hour=_NYSE_OPEN[0], minute=_NYSE_OPEN[1] - _PRE_MARKET_BUFFER,
-            second=0, microsecond=0,
-        )
-    elif wd == 4 and t > close_t:
-        # Friday after close → Monday
-        next_open = (now_et + timedelta(days=3)).replace(
-            hour=_NYSE_OPEN[0], minute=_NYSE_OPEN[1] - _PRE_MARKET_BUFFER,
-            second=0, microsecond=0,
-        )
-    elif wd == 5:
-        # Saturday → Monday
-        next_open = (now_et + timedelta(days=2)).replace(
-            hour=_NYSE_OPEN[0], minute=_NYSE_OPEN[1] - _PRE_MARKET_BUFFER,
-            second=0, microsecond=0,
-        )
-    elif wd == 6:
-        # Sunday → Monday
-        next_open = (now_et + timedelta(days=1)).replace(
-            hour=_NYSE_OPEN[0], minute=_NYSE_OPEN[1] - _PRE_MARKET_BUFFER,
+    from datetime import time as dt_time
+    wd = now_et.weekday()
+    t  = now_et.time()
+    pre_t = dt_time(*_PRE_MARKET_START)
+
+    # Same weekday but before 04:00 (unlikely but possible)
+    if wd < 5 and t < pre_t:
+        next_start = now_et.replace(
+            hour=_PRE_MARKET_START[0], minute=_PRE_MARKET_START[1],
             second=0, microsecond=0,
         )
     else:
-        # Weekday after close → next day
-        next_open = (now_et + timedelta(days=1)).replace(
-            hour=_NYSE_OPEN[0], minute=_NYSE_OPEN[1] - _PRE_MARKET_BUFFER,
+        # Days until next Monday (wraps correctly for Fri/Sat/Sun)
+        days_ahead = {4: 3, 5: 2, 6: 1}.get(wd, 1)  # Fri→Mon, Sat→Mon, Sun→Mon, else +1
+        next_start = (now_et + timedelta(days=days_ahead)).replace(
+            hour=_PRE_MARKET_START[0], minute=_PRE_MARKET_START[1],
             second=0, microsecond=0,
         )
 
-    return max(1, int((next_open - now_et).total_seconds()))
+    return max(1, int((next_start - now_et).total_seconds()))
+
+
+# Keep old name as alias for tests
+def _seconds_until_market(now_et: datetime | None = None) -> int:
+    """Alias — returns 0 if market is open OR in pre-market warmup."""
+    return _seconds_until_active(now_et)
 
 from src.config import Settings
 from src.broker.alpaca_broker import AlpacaBroker
@@ -167,23 +178,31 @@ class TradingBot:
 
         while self._running:
             try:
-                # ── Fast local check: skip weekends / off-hours ──
-                wait = _seconds_until_market()
+                # ── Fast local phase check ──
+                wait = _seconds_until_active()
                 if wait > 0:
-                    next_open = datetime.now(_ET) + timedelta(seconds=wait)
+                    now_et = datetime.now(_ET)
+                    next_start = now_et + timedelta(seconds=wait)
                     log.info(
-                        "bot.market_closed.sleeping",
+                        "bot.closed.sleeping",
                         sleep_seconds=wait,
-                        next_open_et=next_open.strftime("%a %H:%M ET"),
+                        next_active_et=next_start.strftime("%a %H:%M ET"),
                     )
-                    # Sleep in chunks so we can still be interrupted
                     while wait > 0 and self._running:
-                        chunk = min(wait, 300)  # wake every 5 min max
+                        chunk = min(wait, 300)
                         await asyncio.sleep(chunk)
                         wait -= chunk
                     continue
 
-                # ── Double-check with Alpaca (handles holidays) ──
+                phase = _market_phase()
+
+                if phase == "premarket":
+                    # News + signal warmup — no orders
+                    await self._cycle_premarket()
+                    await asyncio.sleep(self._settings.cycle_interval)
+                    continue
+
+                # phase == "open" — double-check with Alpaca for holidays
                 if not await self._broker.is_market_open():
                     log.info("bot.market_closed.holiday")
                     await asyncio.sleep(300)
@@ -200,6 +219,42 @@ class TradingBot:
             await asyncio.sleep(self._settings.cycle_interval)
 
         log.info("bot.run.stopped")
+
+    async def _cycle_premarket(self) -> None:
+        """Pre-market warmup (04:00–09:30 ET) — fetch news and score sentiment,
+        but place NO orders.  Fills the DB with fresh articles so the first
+        live cycle at 09:30 already has warm signals."""
+        t0 = time.monotonic()
+        cfg = self._settings
+
+        news_items = await self._aggregator.fetch_latest(tickers=cfg.universe)
+        if not news_items:
+            log.debug("premarket.no_new_news")
+            return
+
+        sentiments = await self._scorer.score_news(news_items)
+
+        # Fetch bars for context (used by signal_gen, not wasted work)
+        market_data: dict = {}
+        for ticker in sentiments:
+            try:
+                bars = await self._broker.get_bars(ticker, timeframe="1Hour", limit=50)
+                if not bars.empty:
+                    market_data[ticker] = bars
+            except Exception:
+                pass
+
+        # Generate signals (just for logging — not acted on)
+        signals = self._signal_gen.evaluate(sentiments, market_data, set())
+
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        log.info(
+            "premarket.cycle_done",
+            articles=len(news_items),
+            tickers_scored=len(sentiments),
+            signals_ready=len(signals),
+            duration_ms=duration_ms,
+        )
 
     async def _cycle(self) -> None:
         """One iteration of the trading loop."""

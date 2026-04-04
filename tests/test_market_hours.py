@@ -1,60 +1,107 @@
-"""Tests for market hours helper."""
+"""Tests for market hours helpers (_market_phase, _seconds_until_active)."""
 
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from src.main import _seconds_until_market
+from src.main import _market_phase, _seconds_until_active, _seconds_until_market
 
 _ET = ZoneInfo("America/New_York")
 
 
-class TestSecondsUntilMarket:
+class TestMarketPhase:
+    def test_premarket_start(self):
+        t = datetime(2026, 4, 6, 4, 0, tzinfo=_ET)   # Mon 04:00
+        assert _market_phase(t) == "premarket"
+
+    def test_premarket_mid(self):
+        t = datetime(2026, 4, 6, 7, 30, tzinfo=_ET)  # Mon 07:30
+        assert _market_phase(t) == "premarket"
+
+    def test_premarket_ends_at_open(self):
+        t = datetime(2026, 4, 6, 9, 29, tzinfo=_ET)  # Mon 09:29 — still pre
+        assert _market_phase(t) == "premarket"
+
+    def test_open_at_930(self):
+        t = datetime(2026, 4, 6, 9, 30, tzinfo=_ET)  # Mon 09:30
+        assert _market_phase(t) == "open"
+
+    def test_open_midday(self):
+        t = datetime(2026, 4, 6, 12, 0, tzinfo=_ET)
+        assert _market_phase(t) == "open"
+
+    def test_open_at_close(self):
+        # 16:00 is closed (>= close_t)
+        t = datetime(2026, 4, 6, 16, 0, tzinfo=_ET)
+        assert _market_phase(t) == "closed"
+
+    def test_closed_before_premarket(self):
+        t = datetime(2026, 4, 6, 3, 59, tzinfo=_ET)  # Mon 03:59
+        assert _market_phase(t) == "closed"
+
+    def test_closed_after_hours(self):
+        t = datetime(2026, 4, 6, 18, 0, tzinfo=_ET)
+        assert _market_phase(t) == "closed"
+
+    def test_closed_saturday(self):
+        t = datetime(2026, 4, 4, 10, 0, tzinfo=_ET)
+        assert _market_phase(t) == "closed"
+
+    def test_closed_sunday(self):
+        t = datetime(2026, 4, 5, 10, 0, tzinfo=_ET)
+        assert _market_phase(t) == "closed"
+
+
+class TestSecondsUntilActive:
+    def test_premarket_returns_zero(self):
+        t = datetime(2026, 4, 6, 6, 0, tzinfo=_ET)   # Mon 06:00
+        assert _seconds_until_active(t) == 0
+
+    def test_open_returns_zero(self):
+        t = datetime(2026, 4, 6, 10, 0, tzinfo=_ET)  # Mon 10:00
+        assert _seconds_until_active(t) == 0
+
+    def test_saturday_waits_until_monday_4am(self):
+        t = datetime(2026, 4, 4, 12, 0, tzinfo=_ET)  # Sat 12:00
+        wait = _seconds_until_active(t)
+        # Sat 12:00 → Mon 04:00 = 40h = 144000s
+        assert 143800 < wait < 144200
+
+    def test_sunday_waits_until_monday_4am(self):
+        t = datetime(2026, 4, 5, 20, 0, tzinfo=_ET)  # Sun 20:00
+        wait = _seconds_until_active(t)
+        # Sun 20:00 → Mon 04:00 = 8h = 28800s
+        assert 28600 < wait < 29000
+
+    def test_friday_after_close_waits_monday_4am(self):
+        t = datetime(2026, 4, 3, 17, 0, tzinfo=_ET)  # Fri 17:00
+        wait = _seconds_until_active(t)
+        # Fri 17:00 → Mon 04:00 = 59h = 212400s
+        assert 212200 < wait < 212600
+
+    def test_weekday_before_premarket_waits_today(self):
+        t = datetime(2026, 4, 6, 2, 0, tzinfo=_ET)   # Mon 02:00
+        wait = _seconds_until_active(t)
+        # Mon 02:00 → Mon 04:00 = 2h = 7200s
+        assert 7000 < wait < 7400
+
+    def test_weekday_after_close_waits_next_day(self):
+        t = datetime(2026, 4, 6, 17, 0, tzinfo=_ET)  # Mon 17:00
+        wait = _seconds_until_active(t)
+        # Mon 17:00 → Tue 04:00 = 11h = 39600s
+        assert 39400 < wait < 39800
+
+
+class TestBackwardCompat:
+    """_seconds_until_market alias still works for existing tests."""
+
     def test_weekday_during_hours_returns_zero(self):
-        # Monday 10:00 ET
         t = datetime(2026, 4, 6, 10, 0, tzinfo=_ET)
         assert _seconds_until_market(t) == 0
 
-    def test_weekday_within_buffer_returns_zero(self):
-        # Monday 09:16 ET (within 15-min pre-market buffer)
-        t = datetime(2026, 4, 6, 9, 16, tzinfo=_ET)
+    def test_premarket_returns_zero(self):
+        t = datetime(2026, 4, 6, 5, 0, tzinfo=_ET)
         assert _seconds_until_market(t) == 0
 
-    def test_weekday_before_buffer_waits(self):
-        # Monday 08:00 ET → should wait until 09:15 ET
-        t = datetime(2026, 4, 6, 8, 0, tzinfo=_ET)
-        wait = _seconds_until_market(t)
-        assert 4400 < wait < 4600  # ~75 min = 4500s
-
-    def test_weekday_after_close_waits_next_day(self):
-        # Monday 17:00 ET → should wait until Tue 09:15 ET
-        t = datetime(2026, 4, 6, 17, 0, tzinfo=_ET)
-        wait = _seconds_until_market(t)
-        assert 57000 < wait < 59000  # ~16.25h
-
-    def test_friday_after_close_waits_monday(self):
-        # Friday 17:00 ET → should wait until Mon 09:15 ET
-        t = datetime(2026, 4, 3, 17, 0, tzinfo=_ET)
-        wait = _seconds_until_market(t)
-        assert 230000 < wait < 232000  # ~64.25h
-
-    def test_saturday_waits_monday(self):
+    def test_saturday_returns_nonzero(self):
         t = datetime(2026, 4, 4, 12, 0, tzinfo=_ET)
-        wait = _seconds_until_market(t)
-        # Sat 12:00 → Mon 09:15 = 45.25h
-        assert 162000 < wait < 164000
-
-    def test_sunday_waits_monday(self):
-        t = datetime(2026, 4, 5, 12, 0, tzinfo=_ET)
-        wait = _seconds_until_market(t)
-        # Sun 12:00 → Mon 09:15 = 21.25h
-        assert 75000 < wait < 77000
-
-    def test_at_close_exactly_returns_zero(self):
-        # Monday 16:00 ET — market closes at 16:00, should still be in window
-        t = datetime(2026, 4, 6, 16, 0, tzinfo=_ET)
-        assert _seconds_until_market(t) == 0
-
-    def test_one_minute_past_close_waits(self):
-        # Monday 16:01 ET
-        t = datetime(2026, 4, 6, 16, 1, tzinfo=_ET)
         assert _seconds_until_market(t) > 0
