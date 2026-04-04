@@ -174,6 +174,7 @@ class TradingBot:
     async def run(self) -> None:
         """Main loop — runs until stopped."""
         self._running = True
+        self._daily_summary_sent = False   # reset each trading day
         log.info("bot.run.start", interval=self._settings.cycle_interval)
 
         while self._running:
@@ -188,6 +189,7 @@ class TradingBot:
                         sleep_seconds=wait,
                         next_active_et=next_start.strftime("%a %H:%M ET"),
                     )
+                    self._daily_summary_sent = False  # new day coming
                     while wait > 0 and self._running:
                         chunk = min(wait, 300)
                         await asyncio.sleep(chunk)
@@ -200,6 +202,13 @@ class TradingBot:
                     # News + signal warmup — no orders
                     await self._cycle_premarket()
                     await asyncio.sleep(self._settings.cycle_interval)
+                    continue
+
+                # ── Just transitioned from open → closed: send daily summary ──
+                if phase == "closed" and not self._daily_summary_sent:
+                    await self._send_daily_summary()
+                    self._daily_summary_sent = True
+                    await asyncio.sleep(300)
                     continue
 
                 # phase == "open" — double-check with Alpaca for holidays
@@ -389,6 +398,16 @@ class TradingBot:
                 ))
             except Exception as e:
                 log.warning("bot.log_cycle_failed", error=str(e))
+
+    async def _send_daily_summary(self) -> None:
+        """Send end-of-day P&L summary via Discord webhook."""
+        try:
+            account = await self._broker.get_account()
+            positions = await self._broker.get_positions()
+            await self._alerter.notify_daily_summary(account, positions)
+            log.info("bot.daily_summary.sent")
+        except Exception as e:
+            log.error("bot.daily_summary.failed", error=str(e))
 
     async def stop(self) -> None:
         """Graceful shutdown."""
