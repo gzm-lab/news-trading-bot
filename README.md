@@ -1,5 +1,7 @@
 # 📰 News Trading Bot
 
+> 🧒 **In plain English:** This robot reads financial news all day, figures out if the news is good or bad for a stock, and automatically buys or sells it to try to make money — like a trader that never sleeps!
+
 ![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python&logoColor=white)
 ![Tests](https://img.shields.io/badge/tests-157%20passing-brightgreen?logo=pytest)
 ![License](https://img.shields.io/badge/license-MIT-green)
