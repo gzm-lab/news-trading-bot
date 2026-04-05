@@ -1,5 +1,12 @@
 # 📰 News Trading Bot
 
+![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-157%20passing-brightgreen?logo=pytest)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Paper Trading](https://img.shields.io/badge/broker-Alpaca%20Paper-orange?logo=alpaca)
+![FinBERT](https://img.shields.io/badge/NLP-FinBERT-purple?logo=huggingface)
+![Discord](https://img.shields.io/badge/alerts-Discord-5865F2?logo=discord)
+
 Automated algorithmic trading bot for US equities that combines **real-time news sentiment analysis** with **technical indicators** to generate trade signals. Runs on [Alpaca](https://alpaca.markets/) paper trading with zero commissions.
 
 The bot fetches financial news every 2 minutes during NYSE market hours, runs [FinBERT](https://huggingface.co/ProsusAI/finbert) sentiment analysis, blends it with technical momentum, applies risk management rules, and executes trades — fully autonomous.
@@ -88,11 +95,11 @@ chmod 600 .env   # restrict permissions — file contains secrets
 Edit `.env` with your API keys:
 
 ```env
-ALPACA_API_KEY=your-alpaca-key
-ALPACA_SECRET_KEY=your-alpaca-secret
+ALPACA_API_KEY=***
+ALPACA_SECRET_KEY=your-a...cret
 ALPACA_BASE_URL=https://paper-api.alpaca.markets/v2
 
-FINNHUB_API_KEY=your-finnhub-key        # optional — RSS still works without it
+FINNHUB_API_KEY=***        # optional — RSS still works without it
 
 DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...   # optional
 ```
@@ -273,12 +280,18 @@ The bot implements multiple layers of protection:
 - **Daily drawdown circuit breaker:** Trading halts if daily P&L drops below -5%
 - **Buying power cap:** Orders limited to 95% of available buying power
 
-### Alerting
-All risk events are sent to Discord:
-- 🟢 Buy / 🔴 Sell executions with reasoning
-- 🛑 Stop-loss / 🎯 Take-profit exits with P&L
-- ⚠️ Trading halted alerts
-- 📊 End-of-day summary (equity, cash, positions, daily P&L)
+### Discord Alerts
+
+The bot sends real-time Discord notifications for every significant event:
+
+| Event | Emoji | Details |
+|-------|-------|---------|
+| Buy execution | 🟢 | Ticker, price, shares, composite score, reasoning |
+| Sell execution | 🔴 | Ticker, price, shares, P&L, reason |
+| Stop-loss triggered | 🛑 | Ticker, loss %, exit price |
+| Take-profit triggered | 🎯 | Ticker, gain %, exit price |
+| Trading halted | ⚠️ | Daily drawdown threshold hit |
+| End-of-day summary | 📊 | Equity, cash, open positions, daily P&L |
 
 ---
 
@@ -287,7 +300,7 @@ All risk events are sent to Discord:
 All indicators are implemented from scratch in NumPy/Pandas (no `pandas-ta` dependency):
 
 | Indicator | Parameters | Usage in Signal |
-|-----------|-----------|-----------------|
+|-----------|-----------|-----------------| 
 | **RSI** | 14-period EWM | 40% of momentum score (normalized from 50-center) |
 | **MACD** | 12/26/9 | 35% of momentum score (histogram, normalized by σ) |
 | **Bollinger Bands** | 20-period, 2σ | 25% of momentum score (position within bands) |
