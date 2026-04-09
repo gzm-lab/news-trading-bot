@@ -22,6 +22,8 @@ class OrderType(str, Enum):
 
 class OrderStatus(str, Enum):
     PENDING = "pending"
+    PENDING_NEW = "pending_new"
+    NEW = "new"
     FILLED = "filled"
     PARTIALLY_FILLED = "partially_filled"
     CANCELLED = "cancelled"

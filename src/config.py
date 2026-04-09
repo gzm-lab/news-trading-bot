@@ -59,8 +59,8 @@ class StrategySettings(BaseSettings):
     w_volume: float = 0.15
 
     # Thresholds
-    buy_threshold: float = 0.3
-    sell_threshold: float = -0.2
+    buy_threshold: float = 0.15
+    sell_threshold: float = -0.1
 
     # Risk management
     max_position_pct: float = 0.05  # 5% of portfolio per position
@@ -69,13 +69,18 @@ class StrategySettings(BaseSettings):
     max_positions: int = 10
     max_daily_drawdown_pct: float = 0.05  # -5% -> stop trading
     cooldown_minutes: int = 30
-    blackout_minutes: int = 15  # no trading near open/close
+    blackout_minutes: int = 15
+
 
 
 class AlertSettings(BaseSettings):
     """Discord alert configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="DISCORD_")
+    model_config = SettingsConfigDict(
+        env_prefix="DISCORD_",
+        env_file=".env",
+        extra="ignore"
+    )
 
     webhook_url: str = ""
     enabled: bool = True

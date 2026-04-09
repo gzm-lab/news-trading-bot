@@ -333,6 +333,17 @@ class TradingBot:
                         order.qty = int(order._max_value / price)
                     if order.qty <= 0:
                         continue
+                elif order.side.value == "sell":
+                    pos = next((p for p in positions if p.ticker == order.ticker), None)
+                    if pos:
+                        order.qty = pos.qty
+                    if order.qty <= 0:
+                        continue
+                    price = await self._broker.get_latest_price(order.ticker)
+                    if price > 0:
+                        order.qty = int(order._max_value / price)
+                    if order.qty <= 0:
+                        continue
 
                 result = await self._broker.place_order(order)
                 signal = getattr(order, "_signal", None)
