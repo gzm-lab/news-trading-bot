@@ -99,7 +99,7 @@ class RiskManager:
                     ticker=signal.ticker,
                     side=OrderSide.BUY,
                     qty=0,  # Will be calculated with current price
-                    order_type=OrderType.MARKET,
+                    order_type=OrderType.LIMIT,
                 )
                 order._max_value = max_value  # type: ignore[attr-defined]
                 order._signal = signal  # type: ignore[attr-defined]
@@ -111,7 +111,7 @@ class RiskManager:
                     ticker=signal.ticker,
                     side=OrderSide.SELL,
                     qty=0,  # close_position handles qty
-                    order_type=OrderType.MARKET,
+                    order_type=OrderType.LIMIT,
                 )
                 order._signal = signal  # type: ignore[attr-defined]
                 orders.append(order)
