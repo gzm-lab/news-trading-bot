@@ -64,10 +64,7 @@ class StrategySettings(BaseSettings):
 
     # Risk management
     max_position_pct: float = 0.05  # 5% of portfolio per position
-    stop_loss_pct: float = 0.02  # -2%
-    take_profit_pct: float = 0.04  # +4%
-    max_positions: int = 10
-    max_daily_drawdown_pct: float = 0.05  # -5% -> stop trading
+    stop_loss_pct: float = 0.02  # -2%\n    take_profit_pct: float = 0.04  # +4%\n    max_positions: int = 15  # Increased to track more of the universe\n    max_daily_drawdown_pct: float = 0.05  # -5% -> stop trading
     cooldown_minutes: int = 30
     blackout_minutes: int = 15
 

@@ -150,7 +150,10 @@ class AlpacaBroker(BrokerInterface):
             limit=limit,
         )
         raw = await asyncio.to_thread(self._data_client.get_stock_bars, request)
-        bars = raw[ticker]
+        if not raw or not hasattr(raw, "data") or ticker not in raw.data:
+            return pd.DataFrame()
+
+        bars = raw.data[ticker]
 
         data = []
         for bar in bars:
