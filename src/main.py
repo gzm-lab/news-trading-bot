@@ -167,7 +167,7 @@ class TradingBot:
         # Startup notification
         account = await self._broker.get_account()
         self._risk_mgr.set_daily_baseline(account.equity)
-        await self._alerter.notify_startup(account)
+        # Startup notification removed to prevent spam on cron job resets
 
         log.info("bot.setup.done", equity=account.equity, universe=len(cfg.universe))
 
@@ -179,56 +179,82 @@ class TradingBot:
 
         while self._running:
             try:
-                # Calculate qty for buys
-                if order.side.value == "buy" and hasattr(order, "_max_value"):
-                    price = await self._broker.get_latest_price(order.ticker)
-                    if price > 0:
-                        order.qty = int(order._max_value / price)
-                        if order.order_type.value == "limit":
-                            order.limit_price = round(price * 1.002, 2)  # Slippage protection +0.2%
-                    if order.qty <= 0:
-                        continue
-                elif order.side.value == "sell":
-                    pos = next((p for p in positions if p.ticker == order.ticker), None)
-                    if pos:
-                        order.qty = pos.qty
-                    if order.qty <= 0:
-                        continue
-                    price = await self._broker.get_latest_price(order.ticker)
-                    if price > 0:
-                        if order.order_type.value == "limit":
-                            order.limit_price = round(price * 0.998, 2)  # Slippage protection -0.2%
-
-                result = await self._broker.place_order(order)
-                signal = getattr(order, "_signal", None)
-                await self._alerter.notify_trade(
-                    result,
-                    reason=signal.reason if signal else "",
+                # 1. Check market hours
+                wait_sec = _seconds_until_active()
+                if wait_sec > 0:
+                    log.info("bot.market.waiting", seconds=wait_sec)
+                    await asyncio.sleep(wait_sec)
+                
+                t0 = time.monotonic()
+                news_items = await self._aggregator.fetch_latest()
+                scores = await self._scorer.score_news(news_items)
+                signals = self._signal_gen.evaluate(scores, {}, set())
+                
+                if not signals:
+                    await asyncio.sleep(self._settings.cycle_interval)
+                    continue
+                    
+                orders = []
+                for s in signals:
+                    o = self._signal_to_order(s)
+                    if o:
+                        orders.append(o)
+                        
+                positions = await self._broker.get_positions()
+                filled_count = 0
+                for order in orders:
+                    # Calculate qty for buys
+                    if order.side.value == "buy" and hasattr(order, "_max_value"):
+                        price = await self._broker.get_latest_price(order.ticker)
+                        if price > 0:
+                            order.qty = int(order._max_value / price)
+                            if order.order_type.value == "limit":
+                                order.limit_price = round(price * 1.002, 2)
+                        if order.qty <= 0:
+                            continue
+                    elif order.side.value == "sell":
+                        pos = next((p for p in positions if p.ticker == order.ticker), None)
+                        if pos:
+                            order.qty = pos.qty
+                        if order.qty <= 0:
+                            continue
+                        price = await self._broker.get_latest_price(order.ticker)
+                        if price > 0:
+                            if order.order_type.value == "limit":
+                                order.limit_price = round(price * 0.998, 2)
+                                
+                    try:
+                        result = await self._broker.place_order(order)
+                        signal = getattr(order, "_signal", None)
+                        await self._alerter.notify_trade(
+                            result,
+                            reason=signal.reason if signal else "",
+                        )
+                        filled_count += 1
+                    except Exception as e:
+                        log.error("bot.order_failed", ticker=order.ticker, error=str(e))
+                        
+                duration_ms = int((time.monotonic() - t0) * 1000)
+                log.info(
+                    "bot.cycle.done",
+                    news=len(news_items),
+                    signals=len(signals),
+                    orders=filled_count,
+                    duration_ms=duration_ms
                 )
-                self._log_trade(
-                    result,
-                    signal_score=signal.score if signal else 0.0,
-                    reason=signal.reason if signal else "",
-                )
-                filled_count += 1
-
+                
             except Exception as e:
-                log.error("bot.order_failed", ticker=order.ticker, error=str(e))
+                log.error("bot.run_error", error=str(e))
+                await asyncio.sleep(60)
+                
+            await asyncio.sleep(self._settings.cycle_interval)
 
-        # 9. Log cycle
-        duration_ms = int((time.monotonic() - t0) * 1000)
-        self._log_cycle(
-            len(news_items), len(signals), filled_count,
-            account.portfolio_value, account.daily_pnl, t0,
-        )
-
-        log.info(
-            "bot.cycle.done",
-            news=len(news_items),
-            signals=len(signals),
-            orders=filled_count,
-            duration_ms=duration_ms,
-        )
-
-    def _log_trade(self, order, signal_score: float, reason: str) -> None:
-        if self._db:
+if __name__ == "__main__":
+    bot = TradingBot()
+    import asyncio
+    
+    async def main():
+        await bot.setup()
+        await bot.run()
+        
+    asyncio.run(main())
