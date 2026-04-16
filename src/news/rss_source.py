@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import re
+import json
+import urllib.request
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -21,12 +22,6 @@ class RSSSource(NewsSource):
     def __init__(self, feed_urls: list[str], known_tickers: list[str] | None = None):
         self._feed_urls = feed_urls
         self._known_tickers = set(known_tickers or [])
-        # Build regex for ticker extraction
-        if self._known_tickers:
-            pattern = r"\b(" + "|".join(re.escape(t) for t in self._known_tickers) + r")\b"
-            self._ticker_regex = re.compile(pattern)
-        else:
-            self._ticker_regex = None
 
     async def fetch(self, tickers: list[str] | None = None) -> list[NewsItem]:
         all_items: list[NewsItem] = []
@@ -52,15 +47,17 @@ class RSSSource(NewsSource):
                         except Exception:
                             published = None
 
-                    # Extract tickers from title + summary
-                    found_tickers = self._extract_tickers(f"{title} {summary}")
+                    # Extract tickers and sentiment via the new LLM service
+                    found_impacts = await self._extract_tickers_via_llm(title, summary)
+                    tickers_list = list(found_impacts.keys())
 
                     item = NewsItem(
                         source=source_name,
                         title=title,
                         summary=summary[:500],
                         url=link,
-                        tickers=found_tickers,
+                        tickers=tickers_list,
+                        ticker_scores=found_impacts,
                         published_at=published,
                     )
                     all_items.append(item)
@@ -71,9 +68,20 @@ class RSSSource(NewsSource):
         log.info("rss.fetched", items=len(all_items), feeds=len(self._feed_urls))
         return all_items
 
-    def _extract_tickers(self, text: str) -> list[str]:
-        """Extract known ticker symbols from text."""
-        if not self._ticker_regex:
-            return []
-        matches = self._ticker_regex.findall(text)
-        return list(set(matches))
+    async def _extract_tickers_via_llm(self, title: str, summary: str) -> dict[str, float]:
+        """Extract tickers and their sentiment scores using the local Hermes LLM Docker service."""
+        def do_request():
+            url = "http://localhost:8000/extract_tickers"
+            data = json.dumps({"title": title, "summary": summary}).encode("utf-8")
+            req = urllib.request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    res = json.loads(response.read().decode("utf-8"))
+                    impacts = res.get("impacts", [])
+                    # Convert list of dicts to dict[ticker, score]
+                    return {item["ticker"].upper(): float(item["score"]) for item in impacts if "ticker" in item and "score" in item}
+            except Exception as e:
+                log.error("llm_extraction.failed", error=str(e), title=title[:50])
+                return {}
+        
+        return await asyncio.to_thread(do_request)

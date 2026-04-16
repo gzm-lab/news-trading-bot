@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  hermes_extractor:
+    build: 
+      context: ./hermes_service
+      dockerfile: Dockerfile
+    container_name: hermes_llm_service
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    volumes:
+      # On monte le code de Hermes depuis l'hôte pour que le conteneur puisse l'utiliser
+      - ~/.hermes/hermes-agent:/hermes-agent:ro
+    restart: always

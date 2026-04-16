@@ -30,8 +30,7 @@ class TickerSentiment:
 class SentimentScorer:
     """Aggregates sentiment scores per ticker from analyzed news."""
 
-    def __init__(self, analyzer: FinBERTAnalyzer, decay_minutes: int = 30):
-        self._analyzer = analyzer
+    def __init__(self, decay_minutes: int = 30):
         self._decay_minutes = decay_minutes
         # History: ticker -> list of (timestamp, score, headline)
         self._history: dict[str, list[tuple[datetime, float, str]]] = defaultdict(list)
@@ -41,21 +40,15 @@ class SentimentScorer:
         if not news_items:
             return {}
 
-        # Extract texts and analyze with FinBERT
-        texts = [item.text_for_analysis for item in news_items]
-        results = await self._analyzer.analyze(texts)
-
-        # Update news article sentiment in-place (for DB storage)
-        for item, result in zip(news_items, results):
-            item._sentiment = result  # attach for later use
-
         # Group by ticker
         ticker_scores: dict[str, list[tuple[datetime, float, str]]] = defaultdict(list)
 
-        for item, result in zip(news_items, results):
+        for item in news_items:
             timestamp = item.published_at or item.fetched_at
             for ticker in item.tickers:
-                ticker_scores[ticker].append((timestamp, result.score, item.title))
+                # Get the score from the LLM directly!
+                score = item.ticker_scores.get(ticker, 0.0)
+                ticker_scores[ticker].append((timestamp, score, item.title))
 
         # Update history
         now = datetime.now(timezone.utc)

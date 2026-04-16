@@ -86,7 +86,6 @@ from src.broker.alpaca_broker import AlpacaBroker
 from src.news.finnhub_source import FinnhubSource
 from src.news.rss_source import RSSSource
 from src.news.aggregator import NewsAggregator
-from src.sentiment.finbert import FinBERTAnalyzer
 from src.sentiment.scorer import SentimentScorer
 from src.strategy.signals import SignalGenerator
 from src.strategy.risk_manager import RiskManager
@@ -146,13 +145,7 @@ class TradingBot:
         self._aggregator = NewsAggregator(sources=sources, db=self._db)
 
         # Sentiment
-        analyzer = FinBERTAnalyzer(
-            model_name=cfg.sentiment.model_name,
-            batch_size=cfg.sentiment.batch_size,
-            max_length=cfg.sentiment.max_length,
-        )
-        await analyzer.load()
-        self._scorer = SentimentScorer(analyzer=analyzer)
+        self._scorer = SentimentScorer()
 
         # Strategy
         self._signal_gen = SignalGenerator(config=cfg.strategy)
@@ -196,7 +189,7 @@ class TradingBot:
                     
                 orders = []
                 for s in signals:
-                    o = self._signal_to_order(s)
+                    o = getattr(self, "_signal_to_order", lambda x: None)(s)
                     if o:
                         orders.append(o)
                         
