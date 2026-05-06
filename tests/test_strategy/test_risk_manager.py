@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
-from unittest.mock import patch
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
-from src.broker.interface import Account, Order, OrderSide, OrderType, Position
+from src.broker.interface import Account, OrderSide, OrderType, Position
 from src.strategy.risk_manager import RiskManager, RiskState
 from src.strategy.signals import Signal
 
@@ -50,9 +49,11 @@ class TestRiskState:
     def test_defaults(self):
         state = RiskState()
         assert state.daily_start_equity == 0.0
+        assert state.baseline_date is None
         assert state.trading_halted is False
         assert state.halt_reason == ""
         assert state.cooldowns == {}
+        assert state.position_highs == {}
 
 
 class TestRiskManagerBaseline:
@@ -60,6 +61,7 @@ class TestRiskManagerBaseline:
         rm = RiskManager(config=strategy_config)
         rm.set_daily_baseline(100_000.0)
         assert rm.state.daily_start_equity == 100_000.0
+        assert rm.state.baseline_date is not None
         assert rm.state.trading_halted is False
 
     def test_reset_after_halt(self, strategy_config):
@@ -67,6 +69,42 @@ class TestRiskManagerBaseline:
         rm.state.trading_halted = True
         rm.state.halt_reason = "test halt"
         rm.set_daily_baseline(100_000.0)
+        assert rm.state.trading_halted is False
+        assert rm.state.halt_reason == ""
+
+    def test_ensure_daily_baseline_sets_missing_baseline(self, strategy_config):
+        rm = RiskManager(config=strategy_config)
+        account = _make_account(equity=100_000)
+        today = date(2026, 5, 6)
+
+        rm.ensure_daily_baseline(account, today=today)
+
+        assert rm.state.daily_start_equity == 100_000.0
+        assert rm.state.baseline_date == today
+
+    def test_ensure_daily_baseline_same_day_does_not_reset_halt(self, strategy_config):
+        rm = RiskManager(config=strategy_config)
+        today = date(2026, 5, 6)
+        rm.set_daily_baseline(100_000.0, today)
+        rm.state.trading_halted = True
+        rm.state.halt_reason = "drawdown"
+
+        rm.ensure_daily_baseline(_make_account(equity=101_000), today=today)
+
+        assert rm.state.daily_start_equity == 100_000.0
+        assert rm.state.trading_halted is True
+        assert rm.state.halt_reason == "drawdown"
+
+    def test_ensure_daily_baseline_new_day_resets_halt(self, strategy_config):
+        rm = RiskManager(config=strategy_config)
+        rm.set_daily_baseline(100_000.0, date(2026, 5, 6))
+        rm.state.trading_halted = True
+        rm.state.halt_reason = "drawdown"
+
+        rm.ensure_daily_baseline(_make_account(equity=99_000), today=date(2026, 5, 7))
+
+        assert rm.state.daily_start_equity == 99_000.0
+        assert rm.state.baseline_date == date(2026, 5, 7)
         assert rm.state.trading_halted is False
         assert rm.state.halt_reason == ""
 
@@ -128,7 +166,11 @@ class TestFilterSignals:
         assert len(orders) == 1
         assert orders[0].ticker == "AAPL"
         assert orders[0].side == OrderSide.BUY
-        assert orders[0].order_type == OrderType.MARKET
+        assert orders[0].order_type == OrderType.LIMIT
+        assert getattr(orders[0], "_max_value") == pytest.approx(
+            account.equity * strategy_config.max_position_pct
+        )
+        assert getattr(orders[0], "_signal") is signals[0]
 
     def test_sell_signal_creates_order(self, strategy_config):
         rm = RiskManager(config=strategy_config)
@@ -140,6 +182,8 @@ class TestFilterSignals:
         assert len(orders) == 1
         assert orders[0].ticker == "TSLA"
         assert orders[0].side == OrderSide.SELL
+        assert orders[0].order_type == OrderType.LIMIT
+        assert getattr(orders[0], "_signal") is signals[0]
 
     def test_hold_signal_skipped(self, strategy_config):
         rm = RiskManager(config=strategy_config)
@@ -163,7 +207,7 @@ class TestFilterSignals:
     def test_cooldown_blocks_ticker(self, strategy_config):
         rm = RiskManager(config=strategy_config)
         # Set cooldown for AAPL 30 minutes from now
-        rm.state.cooldowns["AAPL"] = datetime.now(timezone.utc) + timedelta(minutes=30)
+        rm.state.cooldowns["AAPL"] = datetime.now(UTC) + timedelta(minutes=30)
 
         signals = [_make_signal("AAPL", "buy")]
         account = _make_account()
@@ -174,7 +218,7 @@ class TestFilterSignals:
     def test_expired_cooldown_allows_trade(self, strategy_config):
         rm = RiskManager(config=strategy_config)
         # Cooldown expired 5 min ago
-        rm.state.cooldowns["AAPL"] = datetime.now(timezone.utc) - timedelta(minutes=5)
+        rm.state.cooldowns["AAPL"] = datetime.now(UTC) - timedelta(minutes=5)
 
         signals = [_make_signal("AAPL", "buy")]
         account = _make_account()
@@ -226,17 +270,45 @@ class TestCheckExits:
         exits = rm.check_exits(positions)
         assert "AAPL" in exits
         assert "AAPL" in rm.state.cooldowns
-        assert rm.state.cooldowns["AAPL"] > datetime.now(timezone.utc)
+        assert rm.state.cooldowns["AAPL"] > datetime.now(UTC)
 
     def test_multiple_exits(self, strategy_config):
         rm = RiskManager(config=strategy_config)
         positions = [
-            _make_position("AAPL", pnl_pct=-0.03),   # stop-loss
-            _make_position("MSFT", pnl_pct=0.05),     # take-profit
-            _make_position("GOOGL", pnl_pct=0.01),    # no exit
+            _make_position("AAPL", pnl_pct=-0.03),  # stop-loss
+            _make_position("MSFT", pnl_pct=0.05),  # take-profit
+            _make_position("GOOGL", pnl_pct=0.01),  # no exit
         ]
 
         exits = rm.check_exits(positions)
         assert "AAPL" in exits
         assert "MSFT" in exits
         assert "GOOGL" not in exits
+
+    def test_trailing_stop_triggers_after_drop_from_high(self, strategy_config):
+        strategy_config.trailing_stop_pct = 0.01
+        rm = RiskManager(config=strategy_config)
+
+        rm.check_exits([_make_position("AAPL", pnl_pct=0.03)])
+        exits = rm.check_exits([_make_position("AAPL", pnl_pct=0.015)])
+
+        assert "AAPL" in exits
+        assert "AAPL" in rm.state.cooldowns
+
+    def test_trailing_stop_ignores_small_pullback(self, strategy_config):
+        strategy_config.trailing_stop_pct = 0.01
+        rm = RiskManager(config=strategy_config)
+
+        rm.check_exits([_make_position("AAPL", pnl_pct=0.03)])
+        exits = rm.check_exits([_make_position("AAPL", pnl_pct=0.025)])
+
+        assert exits == []
+        assert rm.state.position_highs["AAPL"] == pytest.approx(103.0)
+
+    def test_stale_position_high_removed(self, strategy_config):
+        rm = RiskManager(config=strategy_config)
+        rm.check_exits([_make_position("AAPL", pnl_pct=0.03)])
+
+        rm.check_exits([])
+
+        assert "AAPL" not in rm.state.position_highs

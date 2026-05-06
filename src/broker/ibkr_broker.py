@@ -5,8 +5,8 @@ from __future__ import annotations
 import pandas as pd
 
 from src.broker.interface import (
-    BrokerInterface,
     Account,
+    BrokerInterface,
     Order,
     Position,
 )
@@ -30,7 +30,9 @@ class IBKRBroker(BrokerInterface):
     async def close_position(self, ticker: str) -> Order | None:
         raise NotImplementedError
 
-    async def get_bars(self, ticker: str, timeframe: str = "1Hour", limit: int = 50) -> pd.DataFrame:
+    async def get_bars(
+        self, ticker: str, timeframe: str = "1Hour", limit: int = 50
+    ) -> pd.DataFrame:
         raise NotImplementedError
 
     async def get_latest_price(self, ticker: str) -> float:

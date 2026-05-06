@@ -3,21 +3,20 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 
 import pandas as pd
 import structlog
-
-from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
-from alpaca.trading.enums import OrderSide as AlpacaSide, TimeInForce
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
 from alpaca.data.timeframe import TimeFrame
+from alpaca.trading.client import TradingClient
+from alpaca.trading.enums import OrderSide as AlpacaSide
+from alpaca.trading.enums import TimeInForce
+from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
 
 from src.broker.interface import (
-    BrokerInterface,
     Account,
+    BrokerInterface,
     Order,
     OrderSide,
     OrderStatus,
@@ -106,7 +105,9 @@ class AlpacaBroker(BrokerInterface):
             order_type=order.order_type,
             limit_price=order.limit_price,
             id=str(raw.id),
-            status=OrderStatus(raw.status.value) if hasattr(raw.status, "value") else OrderStatus.PENDING,
+            status=OrderStatus(raw.status.value)
+            if hasattr(raw.status, "value")
+            else OrderStatus.PENDING,
             filled_price=float(raw.filled_avg_price) if raw.filled_avg_price else None,
             filled_at=raw.filled_at,
         )
@@ -114,16 +115,16 @@ class AlpacaBroker(BrokerInterface):
     async def close_position(self, ticker: str) -> Order | None:
         assert self._trading_client is not None
         try:
-            raw = await asyncio.to_thread(
-                self._trading_client.close_position, ticker
-            )
+            raw = await asyncio.to_thread(self._trading_client.close_position, ticker)
             return Order(
                 ticker=ticker,
                 side=OrderSide.SELL,
                 qty=int(raw.qty) if hasattr(raw, "qty") else 0,
                 order_type=OrderType.MARKET,
                 id=str(raw.id),
-                status=OrderStatus(raw.status.value) if hasattr(raw.status, "value") else OrderStatus.PENDING,
+                status=OrderStatus(raw.status.value)
+                if hasattr(raw.status, "value")
+                else OrderStatus.PENDING,
                 filled_price=float(raw.filled_avg_price) if raw.filled_avg_price else None,
             )
         except Exception as e:
@@ -157,23 +158,33 @@ class AlpacaBroker(BrokerInterface):
 
         data = []
         for bar in bars:
-            data.append({
-                "timestamp": bar.timestamp,
-                "open": float(bar.open),
-                "high": float(bar.high),
-                "low": float(bar.low),
-                "close": float(bar.close),
-                "volume": float(bar.volume),
-            })
+            data.append(
+                {
+                    "timestamp": bar.timestamp,
+                    "open": float(bar.open),
+                    "high": float(bar.high),
+                    "low": float(bar.low),
+                    "close": float(bar.close),
+                    "volume": float(bar.volume),
+                }
+            )
 
         return pd.DataFrame(data)
 
     async def get_latest_price(self, ticker: str) -> float:
         assert self._data_client is not None
         request = StockLatestQuoteRequest(symbol_or_symbols=ticker)
-        raw = await asyncio.to_thread(self._data_client.get_stock_latest_quote, request)
-        quote = raw[ticker]
-        return float(quote.ask_price or quote.bid_price or 0.0)
+        try:
+            raw = await asyncio.to_thread(self._data_client.get_stock_latest_quote, request)
+            quote = raw.get(ticker) if hasattr(raw, "get") else raw[ticker]
+            ask = float(getattr(quote, "ask_price", 0) or 0)
+            bid = float(getattr(quote, "bid_price", 0) or 0)
+            if ask > 0 and bid > 0:
+                return (ask + bid) / 2
+            return ask or bid or 0.0
+        except Exception as e:
+            log.warning("alpaca.latest_price_failed", ticker=ticker, error=str(e))
+            return 0.0
 
     async def is_market_open(self) -> bool:
         assert self._trading_client is not None

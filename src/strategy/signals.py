@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import structlog
 import pandas as pd
+import structlog
 
 from src.config import StrategySettings
-from src.sentiment.scorer import TickerSentiment
 from src.market.indicators import compute_momentum_score, compute_volume_score
+from src.sentiment.scorer import TickerSentiment
 
 log = structlog.get_logger()
 

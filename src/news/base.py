@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 @dataclass
@@ -19,7 +19,7 @@ class NewsItem:
     tickers: list[str] = field(default_factory=list)
     ticker_scores: dict[str, float] = field(default_factory=dict)
     published_at: datetime | None = None
-    fetched_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    fetched_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property
     def fingerprint(self) -> str:

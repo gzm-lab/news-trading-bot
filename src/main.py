@@ -4,34 +4,45 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import structlog
-from dotenv import load_dotenv
+
+from src.alerts.discord import DiscordAlerter
+from src.broker.alpaca_broker import AlpacaBroker
+from src.config import Settings
+from src.news.aggregator import NewsAggregator
+from src.news.finnhub_source import FinnhubSource
+from src.news.rss_source import RSSSource
+from src.sentiment.scorer import SentimentScorer
+from src.storage.database import Database
+from src.strategy.risk_manager import RiskManager
+from src.strategy.signals import SignalGenerator
 
 # NYSE timezone and schedule
 _ET = ZoneInfo("America/New_York")
-_NYSE_OPEN  = (9, 30)   # 09:30 ET — real market open
-_NYSE_CLOSE = (16, 0)   # 16:00 ET
-_PRE_MARKET_START = (4, 0)   # 04:00 ET — start news/signal collection
-_PRE_MARKET_STOP  = (9, 30)  # 09:30 ET — hand off to live trading
+_NYSE_OPEN = (9, 30)  # 09:30 ET — real market open
+_NYSE_CLOSE = (16, 0)  # 16:00 ET
+_PRE_MARKET_START = (4, 0)  # 04:00 ET — start news/signal collection
+_PRE_MARKET_STOP = (9, 30)  # 09:30 ET — hand off to live trading
 
 
 def _market_phase(now_et: datetime | None = None) -> str:
     """Return the current market phase:
-      'closed'     — weekend / off-hours (sleep until 04:00 ET next weekday)
-      'premarket'  — 04:00–09:30 ET weekdays (news fetch + signal warmup, no orders)
-      'open'       — 09:30–16:00 ET weekdays (full trading)
+    'closed'     — weekend / off-hours (sleep until 04:00 ET next weekday)
+    'premarket'  — 04:00–09:30 ET weekdays (news fetch + signal warmup, no orders)
+    'open'       — 09:30–16:00 ET weekdays (full trading)
     """
     if now_et is None:
         now_et = datetime.now(_ET)
 
     from datetime import time as dt_time
-    wd = now_et.weekday()   # Mon=0 … Sun=6
-    t  = now_et.time()
 
-    pre_t  = dt_time(*_PRE_MARKET_START)
+    wd = now_et.weekday()  # Mon=0 … Sun=6
+    t = now_et.time()
+
+    pre_t = dt_time(*_PRE_MARKET_START)
     open_t = dt_time(*_NYSE_OPEN)
     close_t = dt_time(*_NYSE_CLOSE)
 
@@ -55,22 +66,27 @@ def _seconds_until_active(now_et: datetime | None = None) -> int:
         return 0
 
     from datetime import time as dt_time
+
     wd = now_et.weekday()
-    t  = now_et.time()
+    t = now_et.time()
     pre_t = dt_time(*_PRE_MARKET_START)
 
     # Same weekday but before 04:00 (unlikely but possible)
     if wd < 5 and t < pre_t:
         next_start = now_et.replace(
-            hour=_PRE_MARKET_START[0], minute=_PRE_MARKET_START[1],
-            second=0, microsecond=0,
+            hour=_PRE_MARKET_START[0],
+            minute=_PRE_MARKET_START[1],
+            second=0,
+            microsecond=0,
         )
     else:
         # Days until next Monday (wraps correctly for Fri/Sat/Sun)
         days_ahead = {4: 3, 5: 2, 6: 1}.get(wd, 1)  # Fri→Mon, Sat→Mon, Sun→Mon, else +1
         next_start = (now_et + timedelta(days=days_ahead)).replace(
-            hour=_PRE_MARKET_START[0], minute=_PRE_MARKET_START[1],
-            second=0, microsecond=0,
+            hour=_PRE_MARKET_START[0],
+            minute=_PRE_MARKET_START[1],
+            second=0,
+            microsecond=0,
         )
 
     return max(1, int((next_start - now_et).total_seconds()))
@@ -80,18 +96,6 @@ def _seconds_until_active(now_et: datetime | None = None) -> int:
 def _seconds_until_market(now_et: datetime | None = None) -> int:
     """Alias — returns 0 if market is open OR in pre-market warmup."""
     return _seconds_until_active(now_et)
-
-from src.config import Settings
-from src.broker.alpaca_broker import AlpacaBroker
-from src.news.finnhub_source import FinnhubSource
-from src.news.rss_source import RSSSource
-from src.news.aggregator import NewsAggregator
-from src.sentiment.scorer import SentimentScorer
-from src.strategy.signals import SignalGenerator
-from src.strategy.risk_manager import RiskManager
-from src.alerts.discord import DiscordAlerter
-from src.storage.database import Database
-from src.storage.models import TradeLog, CycleLog, PortfolioSnapshot
 
 log = structlog.get_logger()
 
@@ -164,10 +168,104 @@ class TradingBot:
 
         log.info("bot.setup.done", equity=account.equity, universe=len(cfg.universe))
 
+    async def _run_cycle(self, phase: str | None = None) -> dict[str, int]:
+        """Run one bot cycle and return metrics for logging/tests."""
+        assert self._aggregator is not None
+        assert self._scorer is not None
+        assert self._signal_gen is not None
+        assert self._risk_mgr is not None
+        assert self._broker is not None
+        assert self._alerter is not None
+
+        phase = phase or _market_phase()
+        t0 = time.monotonic()
+        news_items = await self._aggregator.fetch_latest()
+        scores = await self._scorer.score_news(news_items)
+
+        positions = await self._broker.get_positions()
+        current_position_tickers = {p.ticker for p in positions}
+        signals = self._signal_gen.evaluate(scores, {}, current_position_tickers)
+
+        metrics = {"news": len(news_items), "signals": len(signals), "orders": 0, "exits": 0}
+        if phase == "premarket":
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            log.info(
+                "bot.premarket.warmup",
+                news=metrics["news"],
+                signals=metrics["signals"],
+                duration_ms=duration_ms,
+            )
+            return metrics
+
+        account = await self._broker.get_account()
+        self._risk_mgr.ensure_daily_baseline(account)
+        self._risk_mgr.update_daily_pnl(account)
+
+        exit_tickers = self._risk_mgr.check_exits(positions)
+        for ticker in exit_tickers:
+            try:
+                result = await self._broker.close_position(ticker)
+                if result:
+                    await self._alerter.notify_trade(result, reason="risk exit")
+                    metrics["exits"] += 1
+            except Exception as e:
+                log.error("bot.exit_failed", ticker=ticker, error=str(e))
+
+        if metrics["exits"]:
+            positions = await self._broker.get_positions()
+
+        if signals:
+            orders = self._risk_mgr.filter_signals(signals, account, positions)
+        else:
+            orders = []
+
+        for order in orders:
+            # Calculate qty for buys
+            if order.side.value == "buy" and hasattr(order, "_max_value"):
+                price = await self._broker.get_latest_price(order.ticker)
+                if price > 0:
+                    order.qty = int(order._max_value / price)
+                    if order.order_type.value == "limit":
+                        order.limit_price = round(price * 1.002, 2)
+                if order.qty <= 0:
+                    continue
+            elif order.side.value == "sell":
+                pos = next((p for p in positions if p.ticker == order.ticker), None)
+                if pos:
+                    order.qty = pos.qty
+                if order.qty <= 0:
+                    continue
+                price = await self._broker.get_latest_price(order.ticker)
+                if price > 0:
+                    if order.order_type.value == "limit":
+                        order.limit_price = round(price * 0.998, 2)
+
+            try:
+                result = await self._broker.place_order(order)
+                signal = getattr(order, "_signal", None)
+                await self._alerter.notify_trade(
+                    result,
+                    reason=signal.reason if signal else "",
+                )
+                metrics["orders"] += 1
+            except Exception as e:
+                log.error("bot.order_failed", ticker=order.ticker, error=str(e))
+
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        log.info(
+            "bot.cycle.done",
+            news=metrics["news"],
+            signals=metrics["signals"],
+            orders=metrics["orders"],
+            exits=metrics["exits"],
+            duration_ms=duration_ms,
+        )
+        return metrics
+
     async def run(self) -> None:
         """Main loop — runs until stopped."""
         self._running = True
-        self._daily_summary_sent = False   # reset each trading day
+        self._daily_summary_sent = False  # reset each trading day
         log.info("bot.run.start", interval=self._settings.cycle_interval)
 
         while self._running:
@@ -177,77 +275,22 @@ class TradingBot:
                 if wait_sec > 0:
                     log.info("bot.market.waiting", seconds=wait_sec)
                     await asyncio.sleep(wait_sec)
-                
-                t0 = time.monotonic()
-                news_items = await self._aggregator.fetch_latest()
-                scores = await self._scorer.score_news(news_items)
-                signals = self._signal_gen.evaluate(scores, {}, set())
-                
-                if not signals:
-                    await asyncio.sleep(self._settings.cycle_interval)
-                    continue
-                    
-                orders = []
-                for s in signals:
-                    o = getattr(self, "_signal_to_order", lambda x: None)(s)
-                    if o:
-                        orders.append(o)
-                        
-                positions = await self._broker.get_positions()
-                filled_count = 0
-                for order in orders:
-                    # Calculate qty for buys
-                    if order.side.value == "buy" and hasattr(order, "_max_value"):
-                        price = await self._broker.get_latest_price(order.ticker)
-                        if price > 0:
-                            order.qty = int(order._max_value / price)
-                            if order.order_type.value == "limit":
-                                order.limit_price = round(price * 1.002, 2)
-                        if order.qty <= 0:
-                            continue
-                    elif order.side.value == "sell":
-                        pos = next((p for p in positions if p.ticker == order.ticker), None)
-                        if pos:
-                            order.qty = pos.qty
-                        if order.qty <= 0:
-                            continue
-                        price = await self._broker.get_latest_price(order.ticker)
-                        if price > 0:
-                            if order.order_type.value == "limit":
-                                order.limit_price = round(price * 0.998, 2)
-                                
-                    try:
-                        result = await self._broker.place_order(order)
-                        signal = getattr(order, "_signal", None)
-                        await self._alerter.notify_trade(
-                            result,
-                            reason=signal.reason if signal else "",
-                        )
-                        filled_count += 1
-                    except Exception as e:
-                        log.error("bot.order_failed", ticker=order.ticker, error=str(e))
-                        
-                duration_ms = int((time.monotonic() - t0) * 1000)
-                log.info(
-                    "bot.cycle.done",
-                    news=len(news_items),
-                    signals=len(signals),
-                    orders=filled_count,
-                    duration_ms=duration_ms
-                )
-                
+
+                await self._run_cycle()
+
             except Exception as e:
                 log.error("bot.run_error", error=str(e))
                 await asyncio.sleep(60)
-                
+
             await asyncio.sleep(self._settings.cycle_interval)
+
 
 if __name__ == "__main__":
     bot = TradingBot()
     import asyncio
-    
+
     async def main():
         await bot.setup()
         await bot.run()
-        
+
     asyncio.run(main())

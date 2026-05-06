@@ -6,12 +6,12 @@ from unittest.mock import patch
 import pytest
 
 from src.config import (
+    AlertSettings,
     BrokerSettings,
     NewsSettings,
     SentimentSettings,
-    StrategySettings,
-    AlertSettings,
     Settings,
+    StrategySettings,
 )
 
 
@@ -25,7 +25,9 @@ class TestBrokerSettings:
         assert "paper" in cfg.base_url
 
     def test_env_override(self):
-        with patch.dict(os.environ, {"ALPACA_API_KEY": "test-key", "ALPACA_SECRET_KEY": "test-secret"}):
+        with patch.dict(
+            os.environ, {"ALPACA_API_KEY": "test-key", "ALPACA_SECRET_KEY": "test-secret"}
+        ):
             cfg = BrokerSettings()
             assert cfg.api_key == "test-key"
             assert cfg.secret_key == "test-secret"
@@ -72,8 +74,9 @@ class TestStrategySettings:
 
 
 class TestAlertSettings:
-    def test_defaults(self):
-        cfg = AlertSettings()
+    def test_defaults(self, monkeypatch):
+        monkeypatch.delenv("DISCORD_WEBHOOK_URL", raising=False)
+        cfg = AlertSettings(_env_file=None)
         assert cfg.webhook_url == ""
         assert cfg.enabled is True
 

@@ -2,15 +2,22 @@ version: '3.8'
 
 services:
   hermes_extractor:
-    build: 
+    build:
       context: ./hermes_service
       dockerfile: Dockerfile
     container_name: hermes_llm_service
     ports:
       - "8000:8000"
+    env_file:
+      - .env
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     volumes:
       # On monte le code de Hermes depuis l'hôte pour que le conteneur puisse l'utiliser
       - ~/.hermes/hermes-agent:/hermes-agent:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     restart: always

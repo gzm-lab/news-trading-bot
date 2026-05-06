@@ -8,13 +8,13 @@ import re
 def clean_text(text: str) -> str:
     """Clean financial news text for NLP processing."""
     # Remove URLs
-    text = re.sub(r'https?://\S+', '', text)
+    text = re.sub(r"https?://\S+", "", text)
     # Remove HTML entities
-    text = re.sub(r'&\w+;', ' ', text)
+    text = re.sub(r"&\w+;", " ", text)
     # Remove excessive whitespace
-    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r"\s+", " ", text)
     # Remove special chars but keep basic punctuation
-    text = re.sub(r"[^\w\s.,!?;:\'\-]", '', text)
+    text = re.sub(r"[^\w\s.,!?;:\'\-]", "", text)
     return text.strip()
 
 
@@ -28,7 +28,7 @@ def truncate_for_model(text: str, max_length: int = 512) -> str:
         return text
     # Try to cut at a sentence boundary
     truncated = text[:max_chars]
-    last_period = truncated.rfind('.')
+    last_period = truncated.rfind(".")
     if last_period > max_chars * 0.5:
-        return truncated[:last_period + 1]
+        return truncated[: last_period + 1]
     return truncated

@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 import pytest
 
 from src.storage.database import Database
 from src.storage.models import (
-    Base,
-    NewsArticle,
-    TradeLog,
     CycleLog,
+    NewsArticle,
     PortfolioSnapshot,
+    TradeLog,
 )
 
 
@@ -38,12 +35,8 @@ class TestNewsArticle:
             assert saved.fingerprint == "abc123"
 
     def test_unique_fingerprint(self, tmp_db):
-        a1 = NewsArticle(
-            source="test", title="Article 1", fingerprint="unique1"
-        )
-        a2 = NewsArticle(
-            source="test", title="Article 2", fingerprint="unique1"
-        )
+        a1 = NewsArticle(source="test", title="Article 1", fingerprint="unique1")
+        a2 = NewsArticle(source="test", title="Article 2", fingerprint="unique1")
         tmp_db.save(a1)
 
         with pytest.raises(Exception):
@@ -121,8 +114,7 @@ class TestDatabase:
 
     def test_save_all(self, tmp_db):
         articles = [
-            NewsArticle(source="test", title=f"Article {i}", fingerprint=f"fp{i}")
-            for i in range(3)
+            NewsArticle(source="test", title=f"Article {i}", fingerprint=f"fp{i}") for i in range(3)
         ]
         tmp_db.save_all(articles)
 

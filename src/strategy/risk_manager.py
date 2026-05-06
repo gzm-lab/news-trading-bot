@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import structlog
 
-from src.broker.interface import Order, OrderSide, OrderType, Position, Account
+from src.broker.interface import Account, Order, OrderSide, OrderType, Position
 from src.config import StrategySettings
 from src.strategy.signals import Signal
 
@@ -19,12 +19,15 @@ class RiskState:
     """Tracks risk management state across cycles."""
 
     daily_start_equity: float = 0.0
+    baseline_date: date | None = None
     daily_pnl: float = 0.0
     daily_pnl_pct: float = 0.0
     trading_halted: bool = False
     halt_reason: str = ""
     # Cooldown: ticker -> earliest next trade time
     cooldowns: dict[str, datetime] = field(default_factory=dict)
+    # Trailing stop high-water mark: ticker -> highest observed current price
+    position_highs: dict[str, float] = field(default_factory=dict)
 
 
 class RiskManager:
@@ -34,12 +37,22 @@ class RiskManager:
         self._config = config
         self.state = RiskState()
 
-    def set_daily_baseline(self, equity: float) -> None:
+    def set_daily_baseline(self, equity: float, baseline_date: date | None = None) -> None:
         """Call at market open to set the daily starting equity."""
+        baseline_date = baseline_date or datetime.now(UTC).date()
         self.state.daily_start_equity = equity
+        self.state.baseline_date = baseline_date
+        self.state.daily_pnl = 0.0
+        self.state.daily_pnl_pct = 0.0
         self.state.trading_halted = False
         self.state.halt_reason = ""
-        log.info("risk.daily_baseline", equity=equity)
+        log.info("risk.daily_baseline", equity=equity, baseline_date=str(baseline_date))
+
+    def ensure_daily_baseline(self, account: Account, today: date | None = None) -> None:
+        """Reset the baseline once per day before evaluating daily drawdown."""
+        today = today or datetime.now(UTC).date()
+        if self.state.baseline_date != today or self.state.daily_start_equity <= 0:
+            self.set_daily_baseline(account.equity, today)
 
     def update_daily_pnl(self, account: Account) -> None:
         """Update daily P&L tracking."""
@@ -69,7 +82,7 @@ class RiskManager:
 
         orders: list[Order] = []
         current_position_count = len(positions)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         cfg = self._config
 
         for signal in signals:
@@ -119,9 +132,7 @@ class RiskManager:
         log.info("risk.filtered", approved=len(orders))
         return orders
 
-    def check_exits(
-        self, positions: list[Position]
-    ) -> list[str]:
+    def check_exits(self, positions: list[Position]) -> list[str]:
         """Check stop-loss and take-profit for all positions.
 
         Returns list of tickers to close.
@@ -129,8 +140,16 @@ class RiskManager:
         exits: list[str] = []
         cfg = self._config
 
+        current_tickers = {pos.ticker for pos in positions}
+        for stale_ticker in set(self.state.position_highs) - current_tickers:
+            self.state.position_highs.pop(stale_ticker, None)
+
         for pos in positions:
             pnl_pct = pos.unrealized_pnl_pct
+            previous_high = self.state.position_highs.get(pos.ticker, pos.current_price)
+            high = max(previous_high, pos.current_price)
+            self.state.position_highs[pos.ticker] = high
+            trailing_stop_price = high * (1 - cfg.trailing_stop_pct)
 
             if pnl_pct <= -cfg.stop_loss_pct:
                 log.warning(
@@ -138,6 +157,16 @@ class RiskManager:
                     ticker=pos.ticker,
                     pnl_pct=f"{pnl_pct:.2%}",
                     threshold=f"-{cfg.stop_loss_pct:.2%}",
+                )
+                exits.append(pos.ticker)
+
+            elif pos.current_price <= trailing_stop_price:
+                log.warning(
+                    "risk.trailing_stop",
+                    ticker=pos.ticker,
+                    current_price=pos.current_price,
+                    high=high,
+                    threshold=trailing_stop_price,
                 )
                 exits.append(pos.ticker)
 
@@ -151,7 +180,7 @@ class RiskManager:
                 exits.append(pos.ticker)
 
         # Set cooldowns for exited positions
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         cooldown_until = now + timedelta(minutes=cfg.cooldown_minutes)
         for ticker in exits:
             self.state.cooldowns[ticker] = cooldown_until

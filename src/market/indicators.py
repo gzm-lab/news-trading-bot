@@ -93,9 +93,7 @@ def compute_momentum_score(df: pd.DataFrame) -> float:
     if np.isnan(band_width) or band_width < 1e-10:
         bb_score = 0.0
     else:
-        bb_score = float(np.clip(
-            (close.iloc[-1] - middle.iloc[-1]) / (band_width / 2), -1, 1
-        ))
+        bb_score = float(np.clip((close.iloc[-1] - middle.iloc[-1]) / (band_width / 2), -1, 1))
 
     # Weighted composite
     score = 0.4 * rsi_score + 0.35 * macd_score + 0.25 * bb_score

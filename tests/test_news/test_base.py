@@ -1,8 +1,6 @@
 """Tests for news base types."""
 
-from datetime import datetime, timezone
-
-import pytest
+from datetime import UTC
 
 from src.news.base import NewsItem
 
@@ -42,7 +40,7 @@ class TestNewsItem:
     def test_fetched_at_auto_set(self):
         item = NewsItem(source="test", title="Test")
         assert item.fetched_at is not None
-        assert item.fetched_at.tzinfo == timezone.utc
+        assert item.fetched_at.tzinfo == UTC
 
     def test_default_empty_tickers(self):
         item = NewsItem(source="test", title="No tickers")

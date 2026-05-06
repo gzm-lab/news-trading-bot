@@ -2,20 +2,14 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
-
-import pandas as pd
 import numpy as np
-import pytest
+import pandas as pd
 
-from src.config import StrategySettings
-from src.strategy.signals import SignalGenerator, Signal
 from src.sentiment.scorer import TickerSentiment
+from src.strategy.signals import SignalGenerator
 
 
-def _make_sentiment(
-    ticker, avg_score=0.5, news_count=3, news_velocity=2.0, latest_score=0.6
-):
+def _make_sentiment(ticker, avg_score=0.5, news_count=3, news_velocity=2.0, latest_score=0.6):
     return TickerSentiment(
         ticker=ticker,
         avg_score=avg_score,
@@ -28,13 +22,15 @@ def _make_sentiment(
 def _make_ohlcv(n=50):
     np.random.seed(42)
     close = 180.0 + np.cumsum(np.random.randn(n) * 0.5)
-    return pd.DataFrame({
-        "open": close + np.random.randn(n) * 0.2,
-        "high": close + np.abs(np.random.randn(n) * 0.3),
-        "low": close - np.abs(np.random.randn(n) * 0.3),
-        "close": close,
-        "volume": np.random.randint(100_000, 1_000_000, size=n).astype(float),
-    })
+    return pd.DataFrame(
+        {
+            "open": close + np.random.randn(n) * 0.2,
+            "high": close + np.abs(np.random.randn(n) * 0.3),
+            "low": close - np.abs(np.random.randn(n) * 0.3),
+            "close": close,
+            "volume": np.random.randint(100_000, 1_000_000, size=n).astype(float),
+        }
+    )
 
 
 class TestSignalGenerator:
@@ -64,9 +60,7 @@ class TestSignalGenerator:
         }
         market_data = {"TSLA": _make_ohlcv()}
 
-        signals = gen.evaluate(
-            sentiments, market_data, current_positions={"TSLA"}
-        )
+        signals = gen.evaluate(sentiments, market_data, current_positions={"TSLA"})
 
         sell_signals = [s for s in signals if s.action == "sell"]
         assert len(sell_signals) == 1
@@ -79,9 +73,7 @@ class TestSignalGenerator:
         }
         market_data = {"AAPL": _make_ohlcv()}
 
-        signals = gen.evaluate(
-            sentiments, market_data, current_positions={"AAPL"}
-        )
+        signals = gen.evaluate(sentiments, market_data, current_positions={"AAPL"})
 
         # Should be hold, not buy (already in position)
         buy_signals = [s for s in signals if s.action == "buy"]

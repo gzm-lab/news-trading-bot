@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -21,15 +21,17 @@ def mock_analyzer():
 
 @pytest.fixture
 def scorer(mock_analyzer):
-    return SentimentScorer(analyzer=mock_analyzer, decay_minutes=30)
+    # SentimentScorer now consumes ticker_scores already attached by the LLM extractor.
+    return SentimentScorer(decay_minutes=30)
 
 
-def _make_news(title, tickers, minutes_ago=5):
+def _make_news(title, tickers, minutes_ago=5, score=0.5):
     return NewsItem(
         source="test",
         title=title,
         tickers=tickers,
-        published_at=datetime.now(timezone.utc) - timedelta(minutes=minutes_ago),
+        ticker_scores={ticker: score for ticker in tickers},
+        published_at=datetime.now(UTC) - timedelta(minutes=minutes_ago),
     )
 
 
@@ -52,7 +54,7 @@ class TestSentimentScorer:
 
     @pytest.mark.asyncio
     async def test_single_ticker(self, scorer, mock_analyzer):
-        news = [_make_news("Apple earnings beat", ["AAPL"])]
+        news = [_make_news("Apple earnings beat", ["AAPL"], score=0.8)]
         mock_analyzer.analyze.return_value = [_make_sentiment(0.8)]
 
         result = await scorer.score_news(news)
@@ -65,8 +67,8 @@ class TestSentimentScorer:
     @pytest.mark.asyncio
     async def test_multiple_tickers(self, scorer, mock_analyzer):
         news = [
-            _make_news("Apple up", ["AAPL"]),
-            _make_news("Tesla down", ["TSLA"]),
+            _make_news("Apple up", ["AAPL"], score=0.7),
+            _make_news("Tesla down", ["TSLA"], score=-0.6),
         ]
         mock_analyzer.analyze.return_value = [
             _make_sentiment(0.7),
@@ -82,7 +84,7 @@ class TestSentimentScorer:
     @pytest.mark.asyncio
     async def test_shared_tickers(self, scorer, mock_analyzer):
         """One article mentioning multiple tickers should score both."""
-        news = [_make_news("Tech rally boosts AAPL and MSFT", ["AAPL", "MSFT"])]
+        news = [_make_news("Tech rally boosts AAPL and MSFT", ["AAPL", "MSFT"], score=0.6)]
         mock_analyzer.analyze.return_value = [_make_sentiment(0.6)]
 
         result = await scorer.score_news(news)
@@ -92,11 +94,11 @@ class TestSentimentScorer:
     @pytest.mark.asyncio
     async def test_accumulates_history(self, scorer, mock_analyzer):
         """Multiple cycles should accumulate history."""
-        news1 = [_make_news("First article", ["AAPL"])]
+        news1 = [_make_news("First article", ["AAPL"], score=0.5)]
         mock_analyzer.analyze.return_value = [_make_sentiment(0.5)]
         await scorer.score_news(news1)
 
-        news2 = [_make_news("Second article", ["AAPL"])]
+        news2 = [_make_news("Second article", ["AAPL"], score=0.8)]
         mock_analyzer.analyze.return_value = [_make_sentiment(0.8)]
         result = await scorer.score_news(news2)
 
@@ -106,9 +108,9 @@ class TestSentimentScorer:
     async def test_news_velocity(self, scorer, mock_analyzer):
         """Velocity counts news in the last hour."""
         news = [
-            _make_news("Article 1", ["AAPL"], minutes_ago=10),
-            _make_news("Article 2", ["AAPL"], minutes_ago=20),
-            _make_news("Article 3", ["AAPL"], minutes_ago=30),
+            _make_news("Article 1", ["AAPL"], minutes_ago=10, score=0.5),
+            _make_news("Article 2", ["AAPL"], minutes_ago=20, score=0.3),
+            _make_news("Article 3", ["AAPL"], minutes_ago=30, score=0.4),
         ]
         mock_analyzer.analyze.return_value = [
             _make_sentiment(0.5),
@@ -121,7 +123,7 @@ class TestSentimentScorer:
 
     @pytest.mark.asyncio
     async def test_headlines_stored(self, scorer, mock_analyzer):
-        news = [_make_news("Headline to remember", ["AAPL"])]
+        news = [_make_news("Headline to remember", ["AAPL"], score=0.5)]
         mock_analyzer.analyze.return_value = [_make_sentiment(0.5)]
 
         result = await scorer.score_news(news)

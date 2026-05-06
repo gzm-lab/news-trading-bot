@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
-from datetime import datetime, timezone, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from datetime import UTC, datetime, timedelta
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 import pytest
 
-from src.config import StrategySettings
 from src.broker.interface import (
     Account,
     Order,
@@ -20,6 +16,7 @@ from src.broker.interface import (
     OrderType,
     Position,
 )
+from src.config import StrategySettings
 from src.news.base import NewsItem
 from src.storage.database import Database
 
@@ -93,7 +90,7 @@ def sample_order():
 # ──────────────────────────────────────────────
 @pytest.fixture
 def sample_news_items():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return [
         NewsItem(
             source="finnhub",
@@ -138,14 +135,16 @@ def sample_ohlcv():
     open_ = close + np.random.randn(n) * 0.2
     volume = np.random.randint(100_000, 1_000_000, size=n).astype(float)
 
-    return pd.DataFrame({
-        "open": open_,
-        "high": high,
-        "low": low,
-        "close": close,
-        "volume": volume,
-        "timestamp": dates,
-    })
+    return pd.DataFrame(
+        {
+            "open": open_,
+            "high": high,
+            "low": low,
+            "close": close,
+            "volume": volume,
+            "timestamp": dates,
+        }
+    )
 
 
 # ──────────────────────────────────────────────

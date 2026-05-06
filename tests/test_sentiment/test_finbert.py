@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 import torch
@@ -71,18 +71,22 @@ class TestFinBERTAnalyzer:
         mock_analyzer._tokenizer.return_value = mock_inputs
 
         # Two items: positive and negative
-        mock_logits = torch.tensor([
-            [2.0, -1.0, 0.0],   # positive
-            [-1.0, 2.0, -0.5],  # negative
-        ])
+        mock_logits = torch.tensor(
+            [
+                [2.0, -1.0, 0.0],  # positive
+                [-1.0, 2.0, -0.5],  # negative
+            ]
+        )
         mock_output = MagicMock()
         mock_output.logits = mock_logits
         mock_analyzer._model.return_value = mock_output
 
-        results = await mock_analyzer.analyze([
-            "Apple beats earnings expectations",
-            "Tesla crashes after recall announcement",
-        ])
+        results = await mock_analyzer.analyze(
+            [
+                "Apple beats earnings expectations",
+                "Tesla crashes after recall announcement",
+            ]
+        )
 
         assert len(results) == 2
         assert all(isinstance(r, SentimentResult) for r in results)

@@ -64,20 +64,19 @@ class StrategySettings(BaseSettings):
 
     # Risk management
     max_position_pct: float = 0.05  # 5% of portfolio per position
-    stop_loss_pct: float = 0.02  # -2%\n    take_profit_pct: float = 0.04  # +4%\n    max_positions: int = 15  # Increased to track more of the universe\n    max_daily_drawdown_pct: float = 0.05  # -5% -> stop trading
+    stop_loss_pct: float = 0.02  # -2%
+    trailing_stop_pct: float = 0.01  # -1% from observed high
+    take_profit_pct: float = 0.04  # +4%
+    max_positions: int = 15  # Increased to track more of the universe
+    max_daily_drawdown_pct: float = 0.05  # -5% -> stop trading
     cooldown_minutes: int = 30
     blackout_minutes: int = 15
-
 
 
 class AlertSettings(BaseSettings):
     """Discord alert configuration."""
 
-    model_config = SettingsConfigDict(
-        env_prefix="DISCORD_",
-        env_file=".env",
-        extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_prefix="DISCORD_", env_file=".env", extra="ignore")
 
     webhook_url: str = ""
     enabled: bool = True
@@ -106,9 +105,21 @@ class Settings(BaseSettings):
 
     # Universe of tickers to track
     universe: list[str] = [
-        "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA",
-        "NVDA", "META", "NFLX", "AMD", "CRM",
-        "JPM", "V", "JNJ", "UNH", "PG",
+        "AAPL",
+        "MSFT",
+        "GOOGL",
+        "AMZN",
+        "TSLA",
+        "NVDA",
+        "META",
+        "NFLX",
+        "AMD",
+        "CRM",
+        "JPM",
+        "V",
+        "JNJ",
+        "UNH",
+        "PG",
     ]
 
 

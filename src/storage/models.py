@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import (
     Column,
-    Integer,
-    Float,
-    String,
     DateTime,
+    Float,
+    Integer,
+    String,
     Text,
-    Boolean,
-    create_engine,
 )
-from sqlalchemy.orm import DeclarativeBase, Session
+from sqlalchemy.orm import DeclarativeBase
 
 
 class Base(DeclarativeBase):
@@ -33,7 +31,7 @@ class NewsArticle(Base):
     url = Column(String(500), nullable=True)
     tickers = Column(String(200), nullable=True)  # comma-separated
     published_at = Column(DateTime, nullable=True)
-    fetched_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    fetched_at = Column(DateTime, default=lambda: datetime.now(UTC))
     sentiment_score = Column(Float, nullable=True)  # -1.0 to +1.0
     sentiment_label = Column(String(20), nullable=True)  # positive/negative/neutral
     fingerprint = Column(String(64), unique=True, nullable=False)  # dedup hash
@@ -55,7 +53,7 @@ class TradeLog(Base):
     status = Column(String(20), nullable=False)
     signal_score = Column(Float, nullable=True)
     reason = Column(Text, nullable=True)  # why the trade was made
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC))
 
 
 class CycleLog(Base):
@@ -64,7 +62,7 @@ class CycleLog(Base):
     __tablename__ = "cycle_log"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    timestamp = Column(DateTime, default=lambda: datetime.now(UTC))
     news_count = Column(Integer, default=0)
     signals_generated = Column(Integer, default=0)
     orders_placed = Column(Integer, default=0)
@@ -79,7 +77,7 @@ class PortfolioSnapshot(Base):
     __tablename__ = "portfolio_snapshots"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    timestamp = Column(DateTime, default=lambda: datetime.now(UTC))
     equity = Column(Float, nullable=False)
     cash = Column(Float, nullable=False)
     positions_count = Column(Integer, default=0)

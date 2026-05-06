@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 
 import structlog
-from discord_webhook import DiscordWebhook, DiscordEmbed
+from discord_webhook import DiscordEmbed, DiscordWebhook
 
-from src.broker.interface import Order, OrderSide, Account, Position
+from src.broker.interface import Account, Order, OrderSide, Position
 
 log = structlog.get_logger()
 

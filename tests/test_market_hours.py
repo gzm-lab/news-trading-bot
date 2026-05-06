@@ -10,7 +10,7 @@ _ET = ZoneInfo("America/New_York")
 
 class TestMarketPhase:
     def test_premarket_start(self):
-        t = datetime(2026, 4, 6, 4, 0, tzinfo=_ET)   # Mon 04:00
+        t = datetime(2026, 4, 6, 4, 0, tzinfo=_ET)  # Mon 04:00
         assert _market_phase(t) == "premarket"
 
     def test_premarket_mid(self):
@@ -53,7 +53,7 @@ class TestMarketPhase:
 
 class TestSecondsUntilActive:
     def test_premarket_returns_zero(self):
-        t = datetime(2026, 4, 6, 6, 0, tzinfo=_ET)   # Mon 06:00
+        t = datetime(2026, 4, 6, 6, 0, tzinfo=_ET)  # Mon 06:00
         assert _seconds_until_active(t) == 0
 
     def test_open_returns_zero(self):
@@ -79,7 +79,7 @@ class TestSecondsUntilActive:
         assert 212200 < wait < 212600
 
     def test_weekday_before_premarket_waits_today(self):
-        t = datetime(2026, 4, 6, 2, 0, tzinfo=_ET)   # Mon 02:00
+        t = datetime(2026, 4, 6, 2, 0, tzinfo=_ET)  # Mon 02:00
         wait = _seconds_until_active(t)
         # Mon 02:00 → Mon 04:00 = 2h = 7200s
         assert 7000 < wait < 7400

@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 import structlog
 
 from src.news.base import NewsItem
-from src.sentiment.finbert import FinBERTAnalyzer, SentimentResult
 
 log = structlog.get_logger()
 
@@ -51,14 +50,12 @@ class SentimentScorer:
                 ticker_scores[ticker].append((timestamp, score, item.title))
 
         # Update history
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for ticker, entries in ticker_scores.items():
             self._history[ticker].extend(entries)
             # Prune old entries
             cutoff = now - timedelta(minutes=self._decay_minutes * 3)
-            self._history[ticker] = [
-                (t, s, h) for t, s, h in self._history[ticker] if t > cutoff
-            ]
+            self._history[ticker] = [(t, s, h) for t, s, h in self._history[ticker] if t > cutoff]
 
         # Build aggregated sentiment per ticker
         result_map: dict[str, TickerSentiment] = {}

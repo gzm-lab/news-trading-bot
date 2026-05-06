@@ -1,6 +1,8 @@
 import asyncio
-from src.config import Settings
+
 from src.broker.alpaca_broker import AlpacaBroker
+from src.config import Settings
+
 
 async def main():
     settings = Settings()
@@ -10,5 +12,6 @@ async def main():
     print(f"Positions sur Alpaca: {len(pos)}")
     for p in pos:
         print(f"{p.ticker}: {p.qty} shares (PnL: {p.unrealized_pnl})")
+
 
 asyncio.run(main())

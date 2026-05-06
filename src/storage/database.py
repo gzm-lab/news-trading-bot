@@ -6,7 +6,7 @@ from pathlib import Path
 
 import structlog
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from src.storage.models import Base
 

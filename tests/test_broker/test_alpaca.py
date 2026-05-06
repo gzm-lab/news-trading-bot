@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import UTC, datetime
+from unittest.mock import MagicMock, patch
 
-import pandas as pd
 import pytest
 
 from src.broker.alpaca_broker import AlpacaBroker
-from src.broker.interface import Order, OrderSide, OrderStatus, OrderType
+from src.broker.interface import Order, OrderSide, OrderType
 
 
 @pytest.fixture
@@ -20,10 +19,14 @@ def broker():
 class TestAlpacaBrokerConnect:
     @pytest.mark.asyncio
     async def test_connect_creates_clients(self, broker):
-        with patch("src.broker.alpaca_broker.TradingClient") as mock_tc, \
-             patch("src.broker.alpaca_broker.StockHistoricalDataClient") as mock_hdc:
+        with (
+            patch("src.broker.alpaca_broker.TradingClient") as mock_tc,
+            patch("src.broker.alpaca_broker.StockHistoricalDataClient") as mock_hdc,
+        ):
             await broker.connect()
-            mock_tc.assert_called_once_with(api_key="test-key", secret_key="test-secret", paper=True)
+            mock_tc.assert_called_once_with(
+                api_key="test-key", secret_key="test-secret", paper=True
+            )
             mock_hdc.assert_called_once_with(api_key="test-key", secret_key="test-secret")
 
 
@@ -36,8 +39,10 @@ class TestAlpacaBrokerAccount:
         mock_account.buying_power = MagicMock(__float__=lambda s: 160000.0)
         mock_account.portfolio_value = MagicMock(__float__=lambda s: 100000.0)
 
-        with patch("src.broker.alpaca_broker.TradingClient") as mock_tc, \
-             patch("src.broker.alpaca_broker.StockHistoricalDataClient"):
+        with (
+            patch("src.broker.alpaca_broker.TradingClient") as mock_tc,
+            patch("src.broker.alpaca_broker.StockHistoricalDataClient"),
+        ):
             mock_client = MagicMock()
             mock_tc.return_value = mock_client
             mock_client.get_account.return_value = mock_account
@@ -52,8 +57,10 @@ class TestAlpacaBrokerAccount:
 class TestAlpacaBrokerPositions:
     @pytest.mark.asyncio
     async def test_get_positions_empty(self, broker):
-        with patch("src.broker.alpaca_broker.TradingClient") as mock_tc, \
-             patch("src.broker.alpaca_broker.StockHistoricalDataClient"):
+        with (
+            patch("src.broker.alpaca_broker.TradingClient") as mock_tc,
+            patch("src.broker.alpaca_broker.StockHistoricalDataClient"),
+        ):
             mock_client = MagicMock()
             mock_tc.return_value = mock_client
             mock_client.get_all_positions.return_value = []
@@ -70,10 +77,12 @@ class TestAlpacaBrokerOrder:
         mock_alpaca_order.id = "order-abc"
         mock_alpaca_order.status.value = "filled"
         mock_alpaca_order.filled_avg_price = 185.0
-        mock_alpaca_order.filled_at = datetime.now(timezone.utc)
+        mock_alpaca_order.filled_at = datetime.now(UTC)
 
-        with patch("src.broker.alpaca_broker.TradingClient") as mock_tc, \
-             patch("src.broker.alpaca_broker.StockHistoricalDataClient"):
+        with (
+            patch("src.broker.alpaca_broker.TradingClient") as mock_tc,
+            patch("src.broker.alpaca_broker.StockHistoricalDataClient"),
+        ):
             mock_client = MagicMock()
             mock_tc.return_value = mock_client
             mock_client.submit_order.return_value = mock_alpaca_order
@@ -93,14 +102,71 @@ class TestAlpacaBrokerOrder:
             mock_client.submit_order.assert_called_once()
 
 
+class TestAlpacaBrokerLatestPrice:
+    @pytest.mark.asyncio
+    async def test_latest_price_uses_midpoint(self, broker):
+        quote = MagicMock()
+        quote.ask_price = 101.0
+        quote.bid_price = 99.0
+
+        with (
+            patch("src.broker.alpaca_broker.TradingClient"),
+            patch("src.broker.alpaca_broker.StockHistoricalDataClient") as mock_hdc,
+        ):
+            mock_data_client = MagicMock()
+            mock_hdc.return_value = mock_data_client
+            mock_data_client.get_stock_latest_quote.return_value = {"AAPL": quote}
+
+            await broker.connect()
+            price = await broker.get_latest_price("AAPL")
+
+        assert price == 100.0
+
+    @pytest.mark.asyncio
+    async def test_latest_price_uses_ask_when_bid_missing(self, broker):
+        quote = MagicMock()
+        quote.ask_price = 101.0
+        quote.bid_price = 0
+
+        with (
+            patch("src.broker.alpaca_broker.TradingClient"),
+            patch("src.broker.alpaca_broker.StockHistoricalDataClient") as mock_hdc,
+        ):
+            mock_data_client = MagicMock()
+            mock_hdc.return_value = mock_data_client
+            mock_data_client.get_stock_latest_quote.return_value = {"AAPL": quote}
+
+            await broker.connect()
+            price = await broker.get_latest_price("AAPL")
+
+        assert price == 101.0
+
+    @pytest.mark.asyncio
+    async def test_latest_price_returns_zero_when_ticker_missing(self, broker):
+        with (
+            patch("src.broker.alpaca_broker.TradingClient"),
+            patch("src.broker.alpaca_broker.StockHistoricalDataClient") as mock_hdc,
+        ):
+            mock_data_client = MagicMock()
+            mock_hdc.return_value = mock_data_client
+            mock_data_client.get_stock_latest_quote.return_value = {}
+
+            await broker.connect()
+            price = await broker.get_latest_price("AAPL")
+
+        assert price == 0.0
+
+
 class TestAlpacaBrokerMarketStatus:
     @pytest.mark.asyncio
     async def test_is_market_open(self, broker):
         mock_clock = MagicMock()
         mock_clock.is_open = True
 
-        with patch("src.broker.alpaca_broker.TradingClient") as mock_tc, \
-             patch("src.broker.alpaca_broker.StockHistoricalDataClient"):
+        with (
+            patch("src.broker.alpaca_broker.TradingClient") as mock_tc,
+            patch("src.broker.alpaca_broker.StockHistoricalDataClient"),
+        ):
             mock_client = MagicMock()
             mock_tc.return_value = mock_client
             mock_client.get_clock.return_value = mock_clock
@@ -113,8 +179,10 @@ class TestAlpacaBrokerMarketStatus:
         mock_clock = MagicMock()
         mock_clock.is_open = False
 
-        with patch("src.broker.alpaca_broker.TradingClient") as mock_tc, \
-             patch("src.broker.alpaca_broker.StockHistoricalDataClient"):
+        with (
+            patch("src.broker.alpaca_broker.TradingClient") as mock_tc,
+            patch("src.broker.alpaca_broker.StockHistoricalDataClient"),
+        ):
             mock_client = MagicMock()
             mock_tc.return_value = mock_client
             mock_client.get_clock.return_value = mock_clock

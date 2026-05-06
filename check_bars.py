@@ -1,6 +1,8 @@
 import asyncio
-from src.config import Settings
+
 from src.broker.alpaca_broker import AlpacaBroker
+from src.config import Settings
+
 
 async def main():
     settings = Settings()
@@ -13,5 +15,6 @@ async def main():
             print(bars.head())
     except Exception as e:
         print(f"ERROR: {e}")
+
 
 asyncio.run(main())

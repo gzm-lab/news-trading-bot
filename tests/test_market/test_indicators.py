@@ -7,13 +7,13 @@ import pandas as pd
 import pytest
 
 from src.market.indicators import (
-    compute_rsi,
-    compute_macd,
     compute_bollinger_bands,
+    compute_macd,
+    compute_momentum_score,
+    compute_rsi,
+    compute_volume_score,
     compute_vwap,
     detect_volume_anomaly,
-    compute_momentum_score,
-    compute_volume_score,
 )
 
 
@@ -28,13 +28,15 @@ def ohlcv_df():
     np.random.seed(42)
     n = 50
     close = 100.0 + np.cumsum(np.random.randn(n) * 0.5)
-    return pd.DataFrame({
-        "open": close + np.random.randn(n) * 0.1,
-        "high": close + np.abs(np.random.randn(n) * 0.3),
-        "low": close - np.abs(np.random.randn(n) * 0.3),
-        "close": close,
-        "volume": np.random.randint(100_000, 1_000_000, size=n).astype(float),
-    })
+    return pd.DataFrame(
+        {
+            "open": close + np.random.randn(n) * 0.1,
+            "high": close + np.abs(np.random.randn(n) * 0.3),
+            "low": close - np.abs(np.random.randn(n) * 0.3),
+            "close": close,
+            "volume": np.random.randint(100_000, 1_000_000, size=n).astype(float),
+        }
+    )
 
 
 class TestRSI:
@@ -116,12 +118,12 @@ class TestVolumeAnomaly:
     def test_detects_spike(self):
         volume = pd.Series([100_000] * 25 + [500_000])
         anomalies = detect_volume_anomaly(volume, window=20, threshold=2.0)
-        assert anomalies.iloc[-1] is True or anomalies.iloc[-1] == True
+        assert bool(anomalies.iloc[-1])
 
     def test_no_anomaly_normal_volume(self):
         volume = pd.Series([100_000] * 30)
         anomalies = detect_volume_anomaly(volume, window=20, threshold=2.0)
-        assert anomalies.iloc[-1] == False
+        assert not bool(anomalies.iloc[-1])
 
 
 class TestMomentumScore:

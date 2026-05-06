@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 
 import finnhub
 import structlog
@@ -25,7 +25,7 @@ class FinnhubSource(NewsSource):
             return []
 
         all_items: list[NewsItem] = []
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         date_from = (now - self._max_age).strftime("%Y-%m-%d")
         date_to = now.strftime("%Y-%m-%d")
 
@@ -36,9 +36,7 @@ class FinnhubSource(NewsSource):
                 )
 
                 for article in news[:10]:  # Limit per ticker
-                    published = datetime.fromtimestamp(
-                        article.get("datetime", 0), tz=timezone.utc
-                    )
+                    published = datetime.fromtimestamp(article.get("datetime", 0), tz=UTC)
 
                     # Skip old news
                     if now - published > self._max_age:

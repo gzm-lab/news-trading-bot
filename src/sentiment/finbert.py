@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import structlog
 import torch
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from src.sentiment.preprocessor import clean_text, truncate_for_model
 
@@ -84,9 +84,7 @@ class FinBERTAnalyzer:
         results = await self.analyze([text])
         return results[0]
 
-    def _predict_batch(
-        self, texts: list[str], original_texts: list[str]
-    ) -> list[SentimentResult]:
+    def _predict_batch(self, texts: list[str], original_texts: list[str]) -> list[SentimentResult]:
         """Run inference on a batch (called in thread)."""
         inputs = self._tokenizer(
             texts,

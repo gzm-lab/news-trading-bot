@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import time
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -30,7 +29,7 @@ class TestFinnhubSource:
 
     @pytest.mark.asyncio
     async def test_fetch_returns_news_items(self, source):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         mock_articles = [
             {
                 "headline": "Apple beats earnings",
@@ -56,7 +55,7 @@ class TestFinnhubSource:
 
     @pytest.mark.asyncio
     async def test_skips_old_news(self, source):
-        very_old = int((datetime.now(timezone.utc) - timedelta(hours=5)).timestamp())
+        very_old = int((datetime.now(UTC) - timedelta(hours=5)).timestamp())
         mock_articles = [
             {
                 "headline": "Old news",
@@ -80,10 +79,17 @@ class TestFinnhubSource:
 
     @pytest.mark.asyncio
     async def test_multiple_tickers(self, source):
-        now_ts = int(datetime.now(timezone.utc).timestamp()) - 60
-        source._client.company_news = MagicMock(return_value=[
-            {"headline": "News", "summary": "", "url": "https://example.com/x", "datetime": now_ts},
-        ])
+        now_ts = int(datetime.now(UTC).timestamp()) - 60
+        source._client.company_news = MagicMock(
+            return_value=[
+                {
+                    "headline": "News",
+                    "summary": "",
+                    "url": "https://example.com/x",
+                    "datetime": now_ts,
+                },
+            ]
+        )
 
         items = await source.fetch(tickers=["AAPL", "MSFT", "TSLA"])
         # 1 article per ticker call

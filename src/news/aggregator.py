@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from cachetools import TTLCache
 import structlog
+from cachetools import TTLCache
 
 from src.news.base import NewsItem, NewsSource
 from src.storage.database import Database
@@ -26,6 +26,13 @@ class NewsAggregator:
 
         for source in self._sources:
             try:
+                # If the source allows it, pass our seen cache/DB so it can skip API calls.
+                # But to avoid breaking existing sources, we'll do it gracefully.
+                if hasattr(source, "_seen_cache"):
+                    source._seen_cache = self._seen
+                elif hasattr(source, "inject_seen_cache"):
+                    source.inject_seen_cache(self._seen)
+
                 items = await source.fetch(tickers=tickers)
                 all_items.extend(items)
             except Exception as e:

@@ -1,7 +1,5 @@
 """Tests for text preprocessor."""
 
-import pytest
-
 from src.sentiment.preprocessor import clean_text, truncate_for_model
 
 

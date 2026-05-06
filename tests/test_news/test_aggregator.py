@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -52,10 +51,12 @@ class TestNewsAggregator:
     @pytest.mark.asyncio
     async def test_different_articles_kept(self):
         source = MagicMock()
-        source.fetch = AsyncMock(return_value=[
-            _make_item("Article A", "https://example.com/a"),
-            _make_item("Article B", "https://example.com/b"),
-        ])
+        source.fetch = AsyncMock(
+            return_value=[
+                _make_item("Article A", "https://example.com/a"),
+                _make_item("Article B", "https://example.com/b"),
+            ]
+        )
         agg = NewsAggregator(sources=[source])
 
         items = await agg.fetch_latest()
@@ -89,14 +90,17 @@ class TestNewsAggregator:
     @pytest.mark.asyncio
     async def test_stores_to_db(self, tmp_db):
         source = MagicMock()
-        source.fetch = AsyncMock(return_value=[
-            _make_item("Stored Article", "https://example.com/stored"),
-        ])
+        source.fetch = AsyncMock(
+            return_value=[
+                _make_item("Stored Article", "https://example.com/stored"),
+            ]
+        )
         agg = NewsAggregator(sources=[source], db=tmp_db)
 
         await agg.fetch_latest()
 
         from src.storage.models import NewsArticle
+
         with tmp_db.get_session() as session:
             count = session.query(NewsArticle).count()
             assert count == 1

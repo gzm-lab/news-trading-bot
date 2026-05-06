@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch, call
-import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.alerts.discord import DiscordAlerter
-from src.broker.interface import Account, Order, OrderSide, OrderStatus, OrderType, Position
+from src.broker.interface import Order, OrderSide, OrderStatus, OrderType
 
 
 @pytest.fixture
@@ -41,9 +40,13 @@ class TestNotifyTrade:
     @pytest.mark.asyncio
     async def test_buy_notification(self, alerter):
         order = Order(
-            ticker="AAPL", side=OrderSide.BUY, qty=10,
-            order_type=OrderType.MARKET, id="order-1",
-            status=OrderStatus.FILLED, filled_price=185.0,
+            ticker="AAPL",
+            side=OrderSide.BUY,
+            qty=10,
+            order_type=OrderType.MARKET,
+            id="order-1",
+            status=OrderStatus.FILLED,
+            filled_price=185.0,
         )
 
         with patch.object(alerter, "_send", new_callable=AsyncMock) as mock_send:
@@ -56,8 +59,11 @@ class TestNotifyTrade:
     @pytest.mark.asyncio
     async def test_sell_notification(self, alerter):
         order = Order(
-            ticker="TSLA", side=OrderSide.SELL, qty=5,
-            order_type=OrderType.MARKET, status=OrderStatus.FILLED,
+            ticker="TSLA",
+            side=OrderSide.SELL,
+            qty=5,
+            order_type=OrderType.MARKET,
+            status=OrderStatus.FILLED,
             filled_price=250.0,
         )
 
@@ -70,7 +76,9 @@ class TestNotifyTrade:
     @pytest.mark.asyncio
     async def test_disabled_does_nothing(self, disabled_alerter):
         order = Order(
-            ticker="AAPL", side=OrderSide.BUY, qty=10,
+            ticker="AAPL",
+            side=OrderSide.BUY,
+            qty=10,
             order_type=OrderType.MARKET,
         )
         with patch.object(disabled_alerter, "_send", new_callable=AsyncMock) as mock_send:

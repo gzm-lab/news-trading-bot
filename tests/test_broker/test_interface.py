@@ -1,7 +1,5 @@
 """Tests for broker interface data classes."""
 
-import pytest
-
 from src.broker.interface import (
     Account,
     Order,
