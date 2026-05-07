@@ -121,6 +121,20 @@ class TestDatabase:
         with tmp_db.get_session() as session:
             assert session.query(NewsArticle).count() == 3
 
+    def test_save_all_news_articles_skips_existing_fingerprints(self, tmp_db):
+        tmp_db.save(NewsArticle(source="test", title="Existing", fingerprint="fp1"))
+        articles = [
+            NewsArticle(source="test", title="Duplicate", fingerprint="fp1"),
+            NewsArticle(source="test", title="New", fingerprint="fp2"),
+        ]
+
+        tmp_db.save_all(articles)
+
+        with tmp_db.get_session() as session:
+            assert session.query(NewsArticle).count() == 2
+            titles = {article.title for article in session.query(NewsArticle).all()}
+            assert titles == {"Existing", "New"}
+
     def test_not_initialized_raises(self):
         db = Database("unused.db")
         with pytest.raises(AssertionError):

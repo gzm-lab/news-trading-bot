@@ -12,7 +12,7 @@ from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.client import TradingClient
 from alpaca.trading.enums import OrderSide as AlpacaSide
 from alpaca.trading.enums import TimeInForce
-from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest
+from alpaca.trading.requests import GetOrdersRequest, LimitOrderRequest, MarketOrderRequest
 
 from src.broker.interface import (
     Account,
@@ -78,6 +78,8 @@ class AlpacaBroker(BrokerInterface):
     async def place_order(self, order: Order) -> Order:
         assert self._trading_client is not None
 
+        await self._cancel_conflicting_open_orders(order.ticker, order.side)
+
         side = AlpacaSide.BUY if order.side == OrderSide.BUY else AlpacaSide.SELL
 
         if order.order_type == OrderType.LIMIT and order.limit_price:
@@ -111,6 +113,44 @@ class AlpacaBroker(BrokerInterface):
             filled_price=float(raw.filled_avg_price) if raw.filled_avg_price else None,
             filled_at=raw.filled_at,
         )
+
+    async def _cancel_conflicting_open_orders(self, ticker: str, side: OrderSide) -> None:
+        """Cancel open orders for the same symbol/side before submitting a replacement.
+
+        Alpaca reserves quantity for open sell orders. If the bot emits a fresh sell
+        signal while a prior limit sell is still pending, submitting another sell for
+        the full position fails with `insufficient qty available for order`.
+        """
+        assert self._trading_client is not None
+        try:
+            request = GetOrdersRequest(status="open", symbols=[ticker])
+            open_orders = await asyncio.to_thread(self._trading_client.get_orders, request)
+        except Exception as e:
+            log.warning("alpaca.open_orders_failed", ticker=ticker, error=str(e))
+            return
+
+        for open_order in open_orders:
+            raw_side = getattr(open_order, "side", None)
+            open_side = raw_side.value if hasattr(raw_side, "value") else str(raw_side)
+            if open_side != side.value:
+                continue
+            order_id = getattr(open_order, "id", None)
+            try:
+                await asyncio.to_thread(self._trading_client.cancel_order_by_id, order_id)
+                log.info(
+                    "alpaca.open_order_cancelled",
+                    ticker=ticker,
+                    side=side.value,
+                    order_id=order_id,
+                )
+            except Exception as e:
+                log.warning(
+                    "alpaca.open_order_cancel_failed",
+                    ticker=ticker,
+                    side=side.value,
+                    order_id=order_id,
+                    error=str(e),
+                )
 
     async def close_position(self, ticker: str) -> Order | None:
         assert self._trading_client is not None

@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
+from alpaca.trading.enums import OrderSide as AlpacaOrderSide
 
 from src.broker.alpaca_broker import AlpacaBroker
 from src.broker.interface import Order, OrderSide, OrderType
@@ -86,6 +87,7 @@ class TestAlpacaBrokerOrder:
             mock_client = MagicMock()
             mock_tc.return_value = mock_client
             mock_client.submit_order.return_value = mock_alpaca_order
+            mock_client.get_orders.return_value = []
 
             await broker.connect()
 
@@ -99,7 +101,76 @@ class TestAlpacaBrokerOrder:
 
             assert result.id == "order-abc"
             assert result.filled_price == 185.0
+            mock_client.get_orders.assert_called_once()
             mock_client.submit_order.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_place_sell_order_cancels_conflicting_open_sell(self, broker):
+        open_sell = MagicMock()
+        open_sell.id = "old-sell"
+        open_sell.side = AlpacaOrderSide.SELL
+
+        mock_alpaca_order = MagicMock()
+        mock_alpaca_order.id = "new-sell"
+        mock_alpaca_order.status.value = "pending_new"
+        mock_alpaca_order.filled_avg_price = None
+        mock_alpaca_order.filled_at = None
+
+        with (
+            patch("src.broker.alpaca_broker.TradingClient") as mock_tc,
+            patch("src.broker.alpaca_broker.StockHistoricalDataClient"),
+        ):
+            mock_client = MagicMock()
+            mock_tc.return_value = mock_client
+            mock_client.get_orders.return_value = [open_sell]
+            mock_client.submit_order.return_value = mock_alpaca_order
+
+            await broker.connect()
+            order = Order(
+                ticker="TSLA",
+                side=OrderSide.SELL,
+                qty=14,
+                order_type=OrderType.LIMIT,
+                limit_price=450.0,
+            )
+            result = await broker.place_order(order)
+
+        assert result.id == "new-sell"
+        mock_client.cancel_order_by_id.assert_called_once_with("old-sell")
+        mock_client.submit_order.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_place_sell_order_keeps_opposite_side_open_order(self, broker):
+        open_buy = MagicMock()
+        open_buy.id = "old-buy"
+        open_buy.side = AlpacaOrderSide.BUY
+
+        mock_alpaca_order = MagicMock()
+        mock_alpaca_order.id = "new-sell"
+        mock_alpaca_order.status.value = "pending_new"
+        mock_alpaca_order.filled_avg_price = None
+        mock_alpaca_order.filled_at = None
+
+        with (
+            patch("src.broker.alpaca_broker.TradingClient") as mock_tc,
+            patch("src.broker.alpaca_broker.StockHistoricalDataClient"),
+        ):
+            mock_client = MagicMock()
+            mock_tc.return_value = mock_client
+            mock_client.get_orders.return_value = [open_buy]
+            mock_client.submit_order.return_value = mock_alpaca_order
+
+            await broker.connect()
+            order = Order(
+                ticker="TSLA",
+                side=OrderSide.SELL,
+                qty=14,
+                order_type=OrderType.MARKET,
+            )
+            await broker.place_order(order)
+
+        mock_client.cancel_order_by_id.assert_not_called()
+        mock_client.submit_order.assert_called_once()
 
 
 class TestAlpacaBrokerLatestPrice:

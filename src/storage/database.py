@@ -6,9 +6,10 @@ from pathlib import Path
 
 import structlog
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from src.storage.models import Base
+from src.storage.models import Base, NewsArticle
 
 log = structlog.get_logger()
 
@@ -49,7 +50,40 @@ class Database:
             session.commit()
 
     def save_all(self, objects: list) -> None:
-        """Quick helper — save multiple objects."""
+        """Quick helper — save multiple objects.
+
+        NewsArticle rows are deduplicated by fingerprint so a single already-seen
+        article cannot roll back the whole batch and create noisy IntegrityErrors.
+        """
+        if not objects:
+            return
+
+        if all(isinstance(obj, NewsArticle) for obj in objects):
+            with self.get_session() as session:
+                fingerprints = [obj.fingerprint for obj in objects]
+                existing = {
+                    fp
+                    for (fp,) in session.query(NewsArticle.fingerprint)
+                    .filter(NewsArticle.fingerprint.in_(fingerprints))
+                    .all()
+                }
+                new_objects = [obj for obj in objects if obj.fingerprint not in existing]
+                if not new_objects:
+                    return
+                session.add_all(new_objects)
+                try:
+                    session.commit()
+                except IntegrityError:
+                    # Race-safe fallback: persist individually and skip duplicates.
+                    session.rollback()
+                    for obj in new_objects:
+                        session.add(obj)
+                        try:
+                            session.commit()
+                        except IntegrityError:
+                            session.rollback()
+                return
+
         with self.get_session() as session:
             session.add_all(objects)
             session.commit()
