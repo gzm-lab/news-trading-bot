@@ -17,6 +17,7 @@ from src.news.finnhub_source import FinnhubSource
 from src.news.rss_source import RSSSource
 from src.sentiment.scorer import SentimentScorer
 from src.storage.database import Database
+from src.storage.models import CycleLog, TradeLog
 from src.strategy.risk_manager import RiskManager
 from src.strategy.signals import SignalGenerator
 
@@ -243,11 +244,17 @@ class TradingBot:
             try:
                 result = await self._broker.place_order(order)
                 signal = getattr(order, "_signal", None)
+                reason = signal.reason if signal else ""
                 await self._alerter.notify_trade(
                     result,
-                    reason=signal.reason if signal else "",
+                    reason=reason,
                 )
                 metrics["orders"] += 1
+                self._persist_trade(
+                    result,
+                    signal_score=signal.score if signal else None,
+                    reason=reason,
+                )
             except Exception as e:
                 log.error("bot.order_failed", ticker=order.ticker, error=str(e))
 
@@ -260,7 +267,61 @@ class TradingBot:
             exits=metrics["exits"],
             duration_ms=duration_ms,
         )
+        portfolio_value = account.portfolio_value if phase != "premarket" else None
+        daily_pnl = account.daily_pnl if phase != "premarket" else None
+        self._persist_cycle(
+            metrics,
+            duration_ms,
+            portfolio_value=portfolio_value,
+            daily_pnl=daily_pnl,
+        )
         return metrics
+
+    def _persist_trade(self, order, signal_score: float | None = None, reason: str = "") -> None:
+        """Persist an order result to trade_log when database storage is available."""
+        if self._db is None:
+            return
+        try:
+            self._db.save(
+                TradeLog(
+                    order_id=order.id,
+                    ticker=order.ticker,
+                    side=order.side.value,
+                    qty=order.qty,
+                    order_type=order.order_type.value,
+                    limit_price=order.limit_price,
+                    filled_price=order.filled_price,
+                    status=order.status.value,
+                    signal_score=signal_score,
+                    reason=reason,
+                )
+            )
+        except Exception as e:
+            log.warning("bot.trade_log_failed", ticker=order.ticker, error=str(e))
+
+    def _persist_cycle(
+        self,
+        metrics: dict[str, int],
+        duration_ms: int,
+        portfolio_value: float | None = None,
+        daily_pnl: float | None = None,
+    ) -> None:
+        """Persist runtime cycle metrics to cycle_log when database storage is available."""
+        if self._db is None:
+            return
+        try:
+            self._db.save(
+                CycleLog(
+                    news_count=metrics["news"],
+                    signals_generated=metrics["signals"],
+                    orders_placed=metrics["orders"],
+                    portfolio_value=portfolio_value,
+                    daily_pnl=daily_pnl,
+                    cycle_duration_ms=duration_ms,
+                )
+            )
+        except Exception as e:
+            log.warning("bot.cycle_log_failed", error=str(e))
 
     async def run(self) -> None:
         """Main loop — runs until stopped."""
