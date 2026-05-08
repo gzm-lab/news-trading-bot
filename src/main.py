@@ -198,6 +198,8 @@ class TradingBot:
             )
             return metrics
 
+        await self._sync_pending_trades()
+
         account = await self._broker.get_account()
         self._risk_mgr.ensure_daily_baseline(account)
         self._risk_mgr.update_daily_pnl(account)
@@ -298,6 +300,59 @@ class TradingBot:
             )
         except Exception as e:
             log.warning("bot.trade_log_failed", ticker=order.ticker, error=str(e))
+
+    async def _sync_pending_trades(self) -> int:
+        """Refresh locally-persisted pending orders with their latest broker status."""
+        if self._db is None or self._broker is None or not hasattr(self._broker, "get_order"):
+            return 0
+        try:
+            with self._db.get_session() as session:
+                pending_trades = (
+                    session.query(TradeLog)
+                    .filter(
+                        TradeLog.status.in_(
+                            ["pending", "pending_new", "new", "accepted", "partially_filled"]
+                        )
+                    )
+                    .all()
+                )
+                trade_refs = [(trade.id, trade.order_id) for trade in pending_trades if trade.order_id]
+        except Exception as e:
+            log.warning("bot.trade_sync_load_failed", error=str(e))
+            return 0
+
+        updates = []
+        for trade_id, order_id in trade_refs:
+            latest = await self._broker.get_order(order_id)
+            if latest is None:
+                continue
+            updates.append(
+                {
+                    "id": trade_id,
+                    "status": latest.status.value,
+                    "filled_price": latest.filled_price,
+                }
+            )
+
+        if not updates:
+            return 0
+
+        try:
+            with self._db.get_session() as session:
+                for update in updates:
+                    trade = session.get(TradeLog, update["id"])
+                    if trade is None:
+                        continue
+                    trade.status = update["status"]
+                    if update["filled_price"] is not None:
+                        trade.filled_price = update["filled_price"]
+                session.commit()
+        except Exception as e:
+            log.warning("bot.trade_sync_save_failed", error=str(e))
+            return 0
+
+        log.info("bot.trade_sync.done", updated=len(updates))
+        return len(updates)
 
     def _persist_cycle(
         self,

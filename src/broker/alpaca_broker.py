@@ -100,18 +100,67 @@ class AlpacaBroker(BrokerInterface):
 
         raw = await asyncio.to_thread(self._trading_client.submit_order, request)
 
+        return self._order_from_raw(raw, fallback=order)
+
+    async def get_order(self, order_id: str) -> Order | None:
+        """Fetch the latest broker state for an order by id."""
+        assert self._trading_client is not None
+        try:
+            raw = await asyncio.to_thread(self._trading_client.get_order_by_id, order_id)
+        except Exception as e:
+            log.warning("alpaca.order_fetch_failed", order_id=order_id, error=str(e))
+            return None
+        return self._order_from_raw(raw)
+
+    async def get_open_orders(self) -> list[Order]:
+        """Fetch all open orders from Alpaca."""
+        assert self._trading_client is not None
+        try:
+            request = GetOrdersRequest(status="open")
+            raw_orders = await asyncio.to_thread(self._trading_client.get_orders, request)
+        except Exception as e:
+            log.warning("alpaca.open_orders_failed", error=str(e))
+            return []
+        return [self._order_from_raw(raw) for raw in raw_orders]
+
+    def _order_from_raw(self, raw, fallback: Order | None = None) -> Order:
+        """Convert an Alpaca SDK order model into the internal Order dataclass."""
+        raw_side = getattr(raw, "side", None)
+        side_value = raw_side.value if hasattr(raw_side, "value") else str(raw_side)
+        if side_value not in {OrderSide.BUY.value, OrderSide.SELL.value} and fallback is not None:
+            side = fallback.side
+        else:
+            side = OrderSide(side_value)
+
+        raw_type = getattr(raw, "type", None) or getattr(raw, "order_type", None)
+        type_value = raw_type.value if hasattr(raw_type, "value") else str(raw_type)
+        if type_value not in {OrderType.MARKET.value, OrderType.LIMIT.value} and fallback is not None:
+            order_type = fallback.order_type
+        else:
+            order_type = OrderType(type_value)
+
+        raw_status = getattr(raw, "status", None)
+        status_value = raw_status.value if hasattr(raw_status, "value") else str(raw_status)
+        try:
+            status = OrderStatus(status_value)
+        except ValueError:
+            log.warning("alpaca.unknown_order_status", status=status_value)
+            status = OrderStatus.PENDING
+
+        raw_symbol = getattr(raw, "symbol", None)
+        raw_qty = getattr(raw, "qty", None)
+        raw_limit_price = getattr(raw, "limit_price", None)
+
         return Order(
-            ticker=order.ticker,
-            side=order.side,
-            qty=order.qty,
-            order_type=order.order_type,
-            limit_price=order.limit_price,
+            ticker=str(raw_symbol or (fallback.ticker if fallback else "")),
+            side=side,
+            qty=int(float(raw_qty if raw_qty is not None else fallback.qty)),
+            order_type=order_type,
+            limit_price=float(raw_limit_price) if raw_limit_price else (fallback.limit_price if fallback else None),
             id=str(raw.id),
-            status=OrderStatus(raw.status.value)
-            if hasattr(raw.status, "value")
-            else OrderStatus.PENDING,
+            status=status,
             filled_price=float(raw.filled_avg_price) if raw.filled_avg_price else None,
-            filled_at=raw.filled_at,
+            filled_at=getattr(raw, "filled_at", None),
         )
 
     async def _cancel_conflicting_open_orders(self, ticker: str, side: OrderSide) -> None:

@@ -26,8 +26,12 @@ class OrderStatus(StrEnum):
     NEW = "new"
     FILLED = "filled"
     PARTIALLY_FILLED = "partially_filled"
+    CANCELED = "canceled"
     CANCELLED = "cancelled"
     REJECTED = "rejected"
+    EXPIRED = "expired"
+    ACCEPTED = "accepted"
+    PENDING_CANCEL = "pending_cancel"
 
 
 @dataclass
@@ -84,6 +88,12 @@ class BrokerInterface(ABC):
 
     @abstractmethod
     async def place_order(self, order: Order) -> Order: ...
+
+    @abstractmethod
+    async def get_order(self, order_id: str) -> Order | None: ...
+
+    @abstractmethod
+    async def get_open_orders(self) -> list[Order]: ...
 
     @abstractmethod
     async def close_position(self, ticker: str) -> Order | None: ...

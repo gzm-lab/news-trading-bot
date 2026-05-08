@@ -133,6 +133,41 @@ async def test_run_cycle_persists_cycle_and_trade_logs(bot, tmp_db):
 
 
 @pytest.mark.asyncio
+async def test_sync_pending_trades_updates_filled_orders(bot, tmp_db):
+    pending_order = Order(
+        ticker="MSFT",
+        side=OrderSide.BUY,
+        qty=10,
+        order_type=OrderType.LIMIT,
+        limit_price=420.0,
+        id="order-1",
+        status=OrderStatus.PENDING_NEW,
+    )
+    filled_order = Order(
+        ticker="MSFT",
+        side=OrderSide.BUY,
+        qty=10,
+        order_type=OrderType.LIMIT,
+        limit_price=420.0,
+        id="order-1",
+        status=OrderStatus.FILLED,
+        filled_price=419.25,
+    )
+    bot._db = tmp_db
+    bot._persist_trade(pending_order, signal_score=0.8, reason="test signal")
+    bot._broker.get_order = AsyncMock(return_value=filled_order)
+
+    updated = await bot._sync_pending_trades()
+
+    assert updated == 1
+    with tmp_db.get_session() as session:
+        trade = session.query(TradeLog).one()
+    assert trade.status == "filled"
+    assert trade.filled_price == 419.25
+    bot._broker.get_order.assert_awaited_once_with("order-1")
+
+
+@pytest.mark.asyncio
 async def test_run_cycle_blocks_orders_in_premarket(bot):
     bot._broker.get_positions = AsyncMock(return_value=[])
     bot._broker.get_account = AsyncMock()

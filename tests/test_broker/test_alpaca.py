@@ -9,7 +9,7 @@ import pytest
 from alpaca.trading.enums import OrderSide as AlpacaOrderSide
 
 from src.broker.alpaca_broker import AlpacaBroker
-from src.broker.interface import Order, OrderSide, OrderType
+from src.broker.interface import Order, OrderSide, OrderStatus, OrderType
 
 
 @pytest.fixture
@@ -138,6 +138,36 @@ class TestAlpacaBrokerOrder:
         assert result.id == "new-sell"
         mock_client.cancel_order_by_id.assert_called_once_with("old-sell")
         mock_client.submit_order.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_get_order_maps_canceled_status(self, broker):
+        mock_alpaca_order = MagicMock()
+        mock_alpaca_order.id = "old-buy"
+        mock_alpaca_order.symbol = "AAPL"
+        mock_alpaca_order.side.value = "buy"
+        mock_alpaca_order.type.value = "limit"
+        mock_alpaca_order.qty = "10"
+        mock_alpaca_order.limit_price = "200.50"
+        mock_alpaca_order.status.value = "canceled"
+        mock_alpaca_order.filled_avg_price = None
+        mock_alpaca_order.filled_at = None
+
+        with (
+            patch("src.broker.alpaca_broker.TradingClient") as mock_tc,
+            patch("src.broker.alpaca_broker.StockHistoricalDataClient"),
+        ):
+            mock_client = MagicMock()
+            mock_tc.return_value = mock_client
+            mock_client.get_order_by_id.return_value = mock_alpaca_order
+
+            await broker.connect()
+            result = await broker.get_order("old-buy")
+
+        assert result is not None
+        assert result.id == "old-buy"
+        assert result.ticker == "AAPL"
+        assert result.status == OrderStatus.CANCELED
+        assert result.limit_price == 200.50
 
     @pytest.mark.asyncio
     async def test_place_sell_order_keeps_opposite_side_open_order(self, broker):

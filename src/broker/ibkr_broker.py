@@ -27,6 +27,12 @@ class IBKRBroker(BrokerInterface):
     async def place_order(self, order: Order) -> Order:
         raise NotImplementedError
 
+    async def get_order(self, order_id: str) -> Order | None:
+        raise NotImplementedError
+
+    async def get_open_orders(self) -> list[Order]:
+        raise NotImplementedError
+
     async def close_position(self, ticker: str) -> Order | None:
         raise NotImplementedError
 
