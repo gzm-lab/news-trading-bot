@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
+from alpaca.data.timeframe import TimeFrameUnit
 from alpaca.trading.enums import OrderSide as AlpacaOrderSide
 
 from src.broker.alpaca_broker import AlpacaBroker
@@ -201,6 +202,27 @@ class TestAlpacaBrokerOrder:
 
         mock_client.cancel_order_by_id.assert_not_called()
         mock_client.submit_order.assert_called_once()
+
+
+class TestAlpacaBrokerBars:
+    @pytest.mark.asyncio
+    async def test_get_bars_uses_timeframe_units(self, broker):
+        with (
+            patch("src.broker.alpaca_broker.TradingClient"),
+            patch("src.broker.alpaca_broker.StockHistoricalDataClient") as mock_hdc,
+        ):
+            mock_data_client = MagicMock()
+            mock_hdc.return_value = mock_data_client
+            mock_data_client.get_stock_bars.return_value = MagicMock(data={"AAPL": []})
+
+            await broker.connect()
+            bars = await broker.get_bars("AAPL", timeframe="15Min", limit=5)
+
+        assert bars.empty
+        request = mock_data_client.get_stock_bars.call_args.args[0]
+        assert request.timeframe.amount == 15
+        assert request.timeframe.unit == TimeFrameUnit.Minute
+        assert str(request.timeframe) == "15Min"
 
 
 class TestAlpacaBrokerLatestPrice:
