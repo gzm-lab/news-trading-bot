@@ -1,6 +1,7 @@
 """Market data & technical indicators."""
 
 from src.market.indicators import (
+    compute_atr,
     compute_bollinger_bands,
     compute_macd,
     compute_momentum_score,
@@ -15,6 +16,7 @@ __all__ = [
     "compute_macd",
     "compute_bollinger_bands",
     "compute_vwap",
+    "compute_atr",
     "detect_volume_anomaly",
     "compute_momentum_score",
     "compute_volume_score",

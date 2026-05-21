@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field, is_dataclass
+from typing import Any
 
 import pandas as pd
 import structlog
@@ -27,6 +28,9 @@ class Signal:
     technical_score: float
     volume_score: float
     reason: str
+    market_context: Any | None = None
+    features: dict[str, Any] = field(default_factory=dict)
+    reject_reason: str | None = None
 
 
 class SignalGenerator:
@@ -40,6 +44,7 @@ class SignalGenerator:
         sentiments: dict[str, TickerSentiment],
         market_data: dict[str, pd.DataFrame],
         current_positions: set[str],
+        market_contexts: dict[str, Any] | None = None,
     ) -> list[Signal]:
         """Evaluate all tickers and generate signals.
 
@@ -47,9 +52,11 @@ class SignalGenerator:
             sentiments: per-ticker sentiment (from SentimentScorer)
             market_data: per-ticker OHLCV DataFrame (from broker.get_bars)
             current_positions: set of tickers we already hold
+            market_contexts: optional per-ticker MarketContext with anti-chase features
         """
         signals: list[Signal] = []
         cfg = self._config
+        market_contexts = market_contexts or {}
 
         # Evaluate tickers that have sentiment data
         for ticker, sentiment in sentiments.items():
@@ -73,11 +80,16 @@ class SignalGenerator:
             # negative latest score, leaving stop-loss/trailing exits to the risk manager.
             enough_news = sentiment.news_count >= 2 or sentiment.news_velocity >= 2
             market_confirmed = has_market_data and (tech_score >= 0.10 or vol_score >= 0.20)
+            market_context = market_contexts.get(ticker)
+            features = _context_features(market_context)
+            reject_reason = _market_context_reject_reason(sentiment, features)
+            context_acceptable = reject_reason is None
             if (
                 composite > cfg.buy_threshold
                 and ticker not in current_positions
                 and enough_news
                 and market_confirmed
+                and context_acceptable
             ):
                 action = "buy"
                 reason = (
@@ -99,6 +111,8 @@ class SignalGenerator:
             else:
                 action = "hold"
                 reason = f"Signal {composite:.3f} in hold zone"
+                if reject_reason is not None:
+                    reason = f"{reason} | Rejected: {reject_reason}"
 
             signal = Signal(
                 ticker=ticker,
@@ -109,6 +123,9 @@ class SignalGenerator:
                 technical_score=tech_score,
                 volume_score=vol_score,
                 reason=reason,
+                market_context=market_context,
+                features=features,
+                reject_reason=reject_reason,
             )
             signals.append(signal)
 
@@ -120,3 +137,77 @@ class SignalGenerator:
         log.info("signals.generated", total=len(signals), buys=buy_count, sells=sell_count)
 
         return signals
+
+
+def _context_features(market_context: Any | None) -> dict[str, Any]:
+    """Return a plain feature mapping from a MarketContext-like object."""
+    if market_context is None:
+        return {}
+
+    raw_features = getattr(market_context, "features", None)
+    if isinstance(raw_features, dict):
+        return dict(raw_features)
+
+    if is_dataclass(market_context):
+        return {k: v for k, v in asdict(market_context).items() if k != "ticker"}
+
+    if isinstance(market_context, dict):
+        return {k: v for k, v in market_context.items() if k != "ticker"}
+
+    return {
+        name: getattr(market_context, name)
+        for name in (
+            "last_price",
+            "prev_close",
+            "today_open",
+            "day_high",
+            "day_low",
+            "session_vwap",
+            "atr_14",
+            "gap_pct",
+            "gap_atr",
+            "day_range_pos",
+            "price_vs_vwap_pct",
+            "return_5m",
+            "return_15m",
+            "return_60m",
+        )
+        if hasattr(market_context, name)
+    }
+
+
+def _market_context_reject_reason(
+    sentiment: TickerSentiment, features: dict[str, Any]
+) -> str | None:
+    """Return anti-chase rejection reason for positive buy candidates, if any."""
+    if sentiment.avg_score <= 0:
+        return None
+
+    gap_pct = _as_float(features.get("gap_pct"))
+    day_range_pos = _as_float(features.get("day_range_pos"))
+    price_vs_vwap_pct = _as_float(features.get("price_vs_vwap_pct"))
+
+    if gap_pct is not None and gap_pct > 0.05:
+        return "gap_pct_above_5pct"
+    if (
+        gap_pct is not None
+        and day_range_pos is not None
+        and gap_pct > 0.03
+        and day_range_pos > 0.80
+    ):
+        return "large_gap_near_day_high"
+    if price_vs_vwap_pct is not None and price_vs_vwap_pct > 0.01:
+        return "price_above_vwap_chase"
+    if price_vs_vwap_pct is not None and price_vs_vwap_pct < 0:
+        return "positive_news_below_vwap"
+
+    return None
+
+
+def _as_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

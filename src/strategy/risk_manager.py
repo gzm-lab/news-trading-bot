@@ -14,6 +14,30 @@ from src.strategy.signals import Signal
 log = structlog.get_logger()
 
 
+def calculate_risk_position_size(
+    equity: float,
+    entry_price: float,
+    stop_price: float,
+    risk_pct: float,
+    max_notional: float,
+) -> int:
+    """Calculate whole-share quantity from account risk and notional limits.
+
+    Returns 0 for invalid inputs or when even one share would violate constraints.
+    """
+    if equity <= 0 or entry_price <= 0 or risk_pct <= 0 or max_notional <= 0:
+        return 0
+
+    risk_per_share = abs(entry_price - stop_price)
+    if risk_per_share <= 0:
+        return 0
+
+    risk_budget = equity * risk_pct
+    risk_limited_qty = int(risk_budget // risk_per_share)
+    notional_limited_qty = int(max_notional // entry_price)
+    return max(0, min(risk_limited_qty, notional_limited_qty))
+
+
 @dataclass
 class RiskState:
     """Tracks risk management state across cycles."""
@@ -28,6 +52,10 @@ class RiskState:
     cooldowns: dict[str, datetime] = field(default_factory=dict)
     # Trailing stop high-water mark: ticker -> highest observed current price
     position_highs: dict[str, float] = field(default_factory=dict)
+    # UTC date -> ticker -> approved buy count
+    symbol_buy_counts_by_utc_date: dict[date, dict[str, int]] = field(default_factory=dict)
+    # Ticker -> most recent approved buy timestamp
+    last_symbol_buy_at: dict[str, datetime] = field(default_factory=dict)
 
 
 class RiskManager:
@@ -83,8 +111,10 @@ class RiskManager:
         orders: list[Order] = []
         current_position_count = len(positions)
         now = datetime.now(UTC)
+        today = now.date()
         cfg = self._config
         buy_count = 0
+        today_symbol_buy_counts = self.state.symbol_buy_counts_by_utc_date.setdefault(today, {})
 
         for signal in signals:
             if len(orders) >= cfg.max_orders_per_cycle:
@@ -105,6 +135,22 @@ class RiskManager:
                 if buy_count >= cfg.max_buys_per_cycle:
                     log.debug("risk.max_buys_per_cycle", ticker=signal.ticker)
                     continue
+
+                if (
+                    today_symbol_buy_counts.get(signal.ticker, 0)
+                    >= cfg.max_buys_per_symbol_per_day
+                ):
+                    log.debug("risk.max_buys_per_symbol_per_day", ticker=signal.ticker)
+                    continue
+
+                last_symbol_buy_at = self.state.last_symbol_buy_at.get(signal.ticker)
+                if last_symbol_buy_at is not None:
+                    next_symbol_buy_at = last_symbol_buy_at + timedelta(
+                        minutes=cfg.min_minutes_between_symbol_buys
+                    )
+                    if now < next_symbol_buy_at:
+                        log.debug("risk.symbol_buy_cooldown", ticker=signal.ticker)
+                        continue
 
                 # Max positions check
                 if current_position_count >= cfg.max_positions:
@@ -128,6 +174,10 @@ class RiskManager:
                 orders.append(order)
                 current_position_count += 1
                 buy_count += 1
+                today_symbol_buy_counts[signal.ticker] = (
+                    today_symbol_buy_counts.get(signal.ticker, 0) + 1
+                )
+                self.state.last_symbol_buy_at[signal.ticker] = now
                 self.state.cooldowns[signal.ticker] = now + timedelta(minutes=cfg.cooldown_minutes)
 
             elif signal.action == "sell":

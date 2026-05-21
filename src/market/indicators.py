@@ -53,6 +53,16 @@ def compute_vwap(df: pd.DataFrame) -> pd.Series:
     return vwap
 
 
+def compute_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """Average True Range using a rolling mean of true range."""
+    high_low = df["high"] - df["low"]
+    high_prev_close = (df["high"] - df["close"].shift(1)).abs()
+    low_prev_close = (df["low"] - df["close"].shift(1)).abs()
+
+    true_range = pd.concat([high_low, high_prev_close, low_prev_close], axis=1).max(axis=1)
+    return true_range.rolling(window=period).mean()
+
+
 def detect_volume_anomaly(volume: pd.Series, window: int = 20, threshold: float = 2.0) -> pd.Series:
     """Detect volume spikes above threshold * rolling average."""
     avg_vol = volume.rolling(window=window).mean()

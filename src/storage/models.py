@@ -56,6 +56,25 @@ class TradeLog(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(UTC))
 
 
+class SignalLog(Base):
+    """Every evaluated signal, including holds and rejected candidates."""
+
+    __tablename__ = "signal_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime, default=lambda: datetime.now(UTC))
+    ticker = Column(String(10), nullable=False)
+    action = Column(String(10), nullable=False)
+    score = Column(Float, nullable=True)
+    sentiment_score = Column(Float, nullable=True)
+    news_velocity = Column(Float, nullable=True)
+    technical_score = Column(Float, nullable=True)
+    volume_score = Column(Float, nullable=True)
+    reason = Column(Text, nullable=True)
+    reject_reason = Column(Text, nullable=True)
+    features_json = Column(Text, nullable=True)
+
+
 class CycleLog(Base):
     """One row per main loop iteration — for debugging and analysis."""
 

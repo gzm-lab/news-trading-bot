@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
+from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -13,12 +15,13 @@ import structlog
 from src.alerts.discord import DiscordAlerter
 from src.broker.alpaca_broker import AlpacaBroker
 from src.config import Settings
+from src.market.context import MarketContext, compute_market_context
 from src.news.aggregator import NewsAggregator
 from src.news.finnhub_source import FinnhubSource
 from src.news.rss_source import RSSSource
 from src.sentiment.scorer import SentimentScorer
 from src.storage.database import Database
-from src.storage.models import CycleLog, TradeLog
+from src.storage.models import CycleLog, SignalLog, TradeLog
 from src.strategy.risk_manager import RiskManager
 from src.strategy.signals import SignalGenerator
 
@@ -100,6 +103,34 @@ def _seconds_until_market(now_et: datetime | None = None) -> int:
     return _seconds_until_active(now_et)
 
 log = structlog.get_logger()
+
+
+def _plain_mapping(value):
+    """Convert dataclass/dict/object feature containers into a JSON-friendly mapping."""
+    if is_dataclass(value):
+        return {k: v for k, v in asdict(value).items() if k != "ticker"}
+    if isinstance(value, dict):
+        return {k: v for k, v in value.items() if k != "ticker"}
+    raw_features = getattr(value, "features", None)
+    if isinstance(raw_features, dict):
+        return dict(raw_features)
+    names = (
+        "last_price",
+        "prev_close",
+        "today_open",
+        "day_high",
+        "day_low",
+        "session_vwap",
+        "atr_14",
+        "gap_pct",
+        "gap_atr",
+        "day_range_pos",
+        "price_vs_vwap_pct",
+        "return_5m",
+        "return_15m",
+        "return_60m",
+    )
+    return {name: getattr(value, name) for name in names if hasattr(value, name)}
 
 
 class TradingBot:
@@ -186,10 +217,18 @@ class TradingBot:
 
         positions = await self._broker.get_positions()
         current_position_tickers = {p.ticker for p in positions}
-        market_data = await self._fetch_market_data(set(scores) | current_position_tickers)
-        signals = self._signal_gen.evaluate(scores, market_data, current_position_tickers)
+        candidate_tickers = set(scores) | current_position_tickers
+        market_data = await self._fetch_market_data(candidate_tickers)
+        market_contexts = await self._fetch_market_contexts(candidate_tickers)
+        signals = self._signal_gen.evaluate(
+            scores,
+            market_data,
+            current_position_tickers,
+            market_contexts=market_contexts,
+        )
 
         metrics = {"news": len(news_items), "signals": len(signals), "orders": 0, "exits": 0}
+        self._persist_signals(signals)
         if phase == "premarket":
             duration_ms = int((time.monotonic() - t0) * 1000)
             log.info(
@@ -296,6 +335,55 @@ class TradingBot:
                 log.warning("bot.market_data_failed", ticker=ticker, error=str(e))
         return data
 
+    async def _fetch_market_contexts(self, tickers: set[str]) -> dict[str, MarketContext]:
+        """Fetch enough bars to compute per-ticker MarketContext without failing the cycle."""
+        if self._broker is None or not tickers:
+            return {}
+
+        contexts: dict[str, MarketContext] = {}
+        for ticker in sorted(tickers):
+            try:
+                intraday = await self._broker.get_bars(ticker, timeframe="1Min", limit=390)
+                daily = await self._broker.get_bars(ticker, timeframe="1Day", limit=30)
+                contexts[ticker] = compute_market_context(ticker, intraday, daily)
+            except Exception as e:
+                log.warning("bot.market_context_failed", ticker=ticker, error=str(e))
+        return contexts
+
+    def _persist_signals(self, signals) -> None:
+        """Persist all evaluated signals to signal_log when database storage is available."""
+        if self._db is None or not signals:
+            return
+        rows = []
+        for signal in signals:
+            rows.append(
+                SignalLog(
+                    ticker=signal.ticker,
+                    action=signal.action,
+                    score=signal.score,
+                    sentiment_score=signal.sentiment_score,
+                    news_velocity=signal.news_velocity,
+                    technical_score=signal.technical_score,
+                    volume_score=signal.volume_score,
+                    reason=signal.reason,
+                    reject_reason=getattr(signal, "reject_reason", None),
+                    features_json=self._signal_features_json(signal),
+                )
+            )
+        try:
+            self._db.save_all(rows)
+        except Exception as e:
+            log.warning("bot.signal_log_failed", error=str(e))
+
+    @staticmethod
+    def _signal_features_json(signal) -> str:
+        """Serialize Signal.features plus market_context fields, if present."""
+        features = dict(getattr(signal, "features", None) or {})
+        market_context = getattr(signal, "market_context", None)
+        if market_context is not None:
+            features["market_context"] = _plain_mapping(market_context)
+        return json.dumps(features, sort_keys=True, default=str)
+
     def _persist_trade(self, order, signal_score: float | None = None, reason: str = "") -> None:
         """Persist an order result to trade_log when database storage is available."""
         if self._db is None:
@@ -333,7 +421,9 @@ class TradingBot:
                     )
                     .all()
                 )
-                trade_refs = [(trade.id, trade.order_id) for trade in pending_trades if trade.order_id]
+                trade_refs = [
+                    (trade.id, trade.order_id) for trade in pending_trades if trade.order_id
+                ]
         except Exception as e:
             log.warning("bot.trade_sync_load_failed", error=str(e))
             return 0

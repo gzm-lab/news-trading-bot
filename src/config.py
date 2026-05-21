@@ -73,6 +73,11 @@ class StrategySettings(BaseSettings):
     blackout_minutes: int = 15
     max_buys_per_cycle: int = 2
     max_orders_per_cycle: int = 3
+    max_buys_per_symbol_per_day: int = 1
+    min_minutes_between_symbol_buys: int = 240
+    risk_per_trade_pct: float = 0.0025
+    atr_stop_mult: float = 1.0
+    min_reward_risk: float = 1.5
 
 
 class AlertSettings(BaseSettings):

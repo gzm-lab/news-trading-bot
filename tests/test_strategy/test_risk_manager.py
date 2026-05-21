@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 
 from src.broker.interface import Account, OrderSide, OrderType, Position
-from src.strategy.risk_manager import RiskManager, RiskState
+from src.strategy.risk_manager import RiskManager, RiskState, calculate_risk_position_size
 from src.strategy.signals import Signal
 
 
@@ -54,6 +54,56 @@ class TestRiskState:
         assert state.halt_reason == ""
         assert state.cooldowns == {}
         assert state.position_highs == {}
+        assert state.symbol_buy_counts_by_utc_date == {}
+        assert state.last_symbol_buy_at == {}
+
+
+class TestRiskPositionSizing:
+    def test_calculates_quantity_from_dollars_at_risk(self):
+        qty = calculate_risk_position_size(
+            equity=100_000,
+            entry_price=100,
+            stop_price=95,
+            risk_pct=0.0025,
+            max_notional=10_000,
+        )
+
+        assert qty == 50
+
+    def test_caps_quantity_by_max_notional(self):
+        qty = calculate_risk_position_size(
+            equity=100_000,
+            entry_price=100,
+            stop_price=99,
+            risk_pct=0.01,
+            max_notional=5_000,
+        )
+
+        assert qty == 50
+
+    @pytest.mark.parametrize(
+        ("equity", "entry_price", "stop_price", "risk_pct", "max_notional"),
+        [
+            (0, 100, 95, 0.0025, 10_000),
+            (100_000, 0, 95, 0.0025, 10_000),
+            (100_000, 100, 100, 0.0025, 10_000),
+            (100_000, 100, 95, 0, 10_000),
+            (100_000, 100, 95, 0.0025, 0),
+        ],
+    )
+    def test_invalid_or_zero_risk_inputs_return_zero(
+        self, equity, entry_price, stop_price, risk_pct, max_notional
+    ):
+        assert (
+            calculate_risk_position_size(
+                equity=equity,
+                entry_price=entry_price,
+                stop_price=stop_price,
+                risk_pct=risk_pct,
+                max_notional=max_notional,
+            )
+            == 0
+        )
 
 
 class TestRiskManagerBaseline:
@@ -248,7 +298,8 @@ class TestFilterSignals:
 
         orders = rm.filter_signals(signals, _make_account(), [])
 
-        assert len([o for o in orders if o.side == OrderSide.BUY]) == strategy_config.max_buys_per_cycle
+        buy_orders = [o for o in orders if o.side == OrderSide.BUY]
+        assert len(buy_orders) == strategy_config.max_buys_per_cycle
 
     def test_approved_order_sets_cooldown(self, strategy_config):
         rm = RiskManager(config=strategy_config)
@@ -263,6 +314,62 @@ class TestFilterSignals:
         signal = _make_signal("AAPL", "buy")
 
         first = rm.filter_signals([signal], _make_account(), [])
+        second = rm.filter_signals([signal], _make_account(), [])
+
+        assert len(first) == 1
+        assert second == []
+
+    def test_max_buys_per_symbol_per_day_blocks_second_buy_after_cooldown(
+        self, strategy_config
+    ):
+        rm = RiskManager(config=strategy_config)
+        signal = _make_signal("AAPL", "buy")
+
+        first = rm.filter_signals([signal], _make_account(), [])
+        rm.state.cooldowns["AAPL"] = datetime.now(UTC) - timedelta(minutes=1)
+        rm.state.last_symbol_buy_at["AAPL"] = datetime.now(UTC) - timedelta(
+            minutes=strategy_config.min_minutes_between_symbol_buys + 1
+        )
+        second = rm.filter_signals([signal], _make_account(), [])
+
+        assert len(first) == 1
+        assert second == []
+        today_counts = rm.state.symbol_buy_counts_by_utc_date[datetime.now(UTC).date()]
+        assert today_counts["AAPL"] == 1
+
+    def test_per_symbol_daily_buy_limit_allows_different_symbol(self, strategy_config):
+        rm = RiskManager(config=strategy_config)
+
+        first = rm.filter_signals([_make_signal("AAPL", "buy")], _make_account(), [])
+        second = rm.filter_signals([_make_signal("MSFT", "buy")], _make_account(), [])
+
+        assert [order.ticker for order in first] == ["AAPL"]
+        assert [order.ticker for order in second] == ["MSFT"]
+
+    def test_daily_buy_count_is_keyed_by_utc_date(self, strategy_config):
+        rm = RiskManager(config=strategy_config)
+        yesterday = datetime.now(UTC).date() - timedelta(days=1)
+        rm.state.symbol_buy_counts_by_utc_date[yesterday] = {"AAPL": 1}
+        rm.state.last_symbol_buy_at["AAPL"] = datetime.now(UTC) - timedelta(days=1)
+
+        orders = rm.filter_signals([_make_signal("AAPL", "buy")], _make_account(), [])
+
+        assert len(orders) == 1
+        assert rm.state.symbol_buy_counts_by_utc_date[datetime.now(UTC).date()]["AAPL"] == 1
+
+    def test_min_minutes_between_symbol_buys_blocks_after_generic_cooldown(
+        self, strategy_config
+    ):
+        strategy_config.max_buys_per_symbol_per_day = 2
+        rm = RiskManager(config=strategy_config)
+        signal = _make_signal("AAPL", "buy")
+
+        first = rm.filter_signals([signal], _make_account(), [])
+        rm.state.cooldowns["AAPL"] = datetime.now(UTC) - timedelta(minutes=1)
+        rm.state.symbol_buy_counts_by_utc_date[datetime.now(UTC).date()]["AAPL"] = 1
+        rm.state.last_symbol_buy_at["AAPL"] = datetime.now(UTC) - timedelta(
+            minutes=strategy_config.min_minutes_between_symbol_buys - 1
+        )
         second = rm.filter_signals([signal], _make_account(), [])
 
         assert len(first) == 1

@@ -9,6 +9,7 @@ from src.storage.models import (
     CycleLog,
     NewsArticle,
     PortfolioSnapshot,
+    SignalLog,
     TradeLog,
 )
 
@@ -66,6 +67,36 @@ class TestTradeLog:
             assert saved.signal_score == 0.65
 
 
+class TestSignalLog:
+    def test_create_and_save(self, tmp_db):
+        signal = SignalLog(
+            ticker="AAPL",
+            action="hold",
+            score=0.42,
+            sentiment_score=0.75,
+            news_velocity=2.0,
+            technical_score=0.1,
+            volume_score=0.2,
+            reason="Signal in hold zone",
+            reject_reason="price_above_vwap_chase",
+            features_json='{"gap_pct": 0.061, "last_price": 191.5}',
+        )
+        tmp_db.save(signal)
+
+        with tmp_db.get_session() as session:
+            saved = session.query(SignalLog).first()
+            assert saved.ticker == "AAPL"
+            assert saved.action == "hold"
+            assert saved.score == 0.42
+            assert saved.sentiment_score == 0.75
+            assert saved.news_velocity == 2.0
+            assert saved.technical_score == 0.1
+            assert saved.volume_score == 0.2
+            assert saved.reason == "Signal in hold zone"
+            assert saved.reject_reason == "price_above_vwap_chase"
+            assert saved.features_json == '{"gap_pct": 0.061, "last_price": 191.5}'
+
+
 class TestCycleLog:
     def test_create_and_save(self, tmp_db):
         cycle = CycleLog(
@@ -111,6 +142,7 @@ class TestDatabase:
         with db.get_session() as session:
             assert session.query(NewsArticle).count() == 0
             assert session.query(TradeLog).count() == 0
+            assert session.query(SignalLog).count() == 0
 
     def test_save_all(self, tmp_db):
         articles = [

@@ -74,6 +74,11 @@ class TestStrategySettings:
         assert cfg.cooldown_minutes == 120
         assert cfg.max_buys_per_cycle == 2
         assert cfg.max_orders_per_cycle == 3
+        assert cfg.max_buys_per_symbol_per_day == 1
+        assert cfg.min_minutes_between_symbol_buys == 240
+        assert cfg.risk_per_trade_pct == pytest.approx(0.0025)
+        assert cfg.atr_stop_mult == pytest.approx(1.0)
+        assert cfg.min_reward_risk == pytest.approx(1.5)
         assert cfg.max_daily_drawdown_pct > 0
 
 

@@ -8,6 +8,16 @@ import pandas as pd
 from src.sentiment.scorer import TickerSentiment
 from src.strategy.signals import SignalGenerator
 
+try:
+    from src.market.context import MarketContext
+except ModuleNotFoundError:  # Task 1 may not have landed yet; test expected API meanwhile.
+    from dataclasses import dataclass, field
+
+    @dataclass
+    class MarketContext:
+        ticker: str
+        features: dict[str, float | bool | str | None] = field(default_factory=dict)
+
 
 def _make_sentiment(ticker, avg_score=0.5, news_count=3, news_velocity=2.0, latest_score=0.6):
     return TickerSentiment(
@@ -47,7 +57,32 @@ def _make_bullish_ohlcv(n=50):
     )
 
 
+def _make_context(ticker="AAPL", **features):
+    defaults = {
+        "last_price": 100.0,
+        "prev_close": 100.0,
+        "today_open": 100.0,
+        "day_high": 101.0,
+        "day_low": 99.0,
+        "session_vwap": 100.0,
+        "atr_14": 1.0,
+        "gap_pct": 0.0,
+        "gap_atr": 0.0,
+        "day_range_pos": 0.50,
+        "price_vs_vwap_pct": 0.0,
+        "return_5m": 0.0,
+        "return_15m": 0.0,
+        "return_60m": 0.0,
+    }
+    defaults.update(features)
+    try:
+        return MarketContext(ticker=ticker, features=defaults)
+    except TypeError:
+        return MarketContext(ticker=ticker, **defaults)
+
+
 class TestSignalGenerator:
+
     def test_no_sentiments_no_signals(self, strategy_config):
         gen = SignalGenerator(config=strategy_config)
         signals = gen.evaluate({}, {}, set())
@@ -167,7 +202,9 @@ class TestSignalGenerator:
     def test_mild_negative_sentiment_does_not_sell(self, strategy_config):
         gen = SignalGenerator(config=strategy_config)
         sentiments = {
-            "AAPL": _make_sentiment("AAPL", avg_score=-0.4, news_count=3, news_velocity=1.0, latest_score=-0.2),
+            "AAPL": _make_sentiment(
+                "AAPL", avg_score=-0.4, news_count=3, news_velocity=1.0, latest_score=-0.2
+            ),
         }
         market_data = {"AAPL": _make_ohlcv()}
 
@@ -201,3 +238,107 @@ class TestSignalGenerator:
         # Technical and volume scores should be 0 without market data
         assert signals[0].technical_score == 0.0
         assert signals[0].volume_score == 0.0
+
+    def test_signal_stores_market_context_features_and_reject_reason(self, strategy_config):
+        gen = SignalGenerator(config=strategy_config)
+        sentiments = {
+            "AAPL": _make_sentiment("AAPL", avg_score=1.0, news_count=3, news_velocity=3.0),
+        }
+        market_data = {"AAPL": _make_bullish_ohlcv()}
+        context = _make_context(gap_pct=0.06)
+
+        signals = gen.evaluate(
+            sentiments,
+            market_data,
+            current_positions=set(),
+            market_contexts={"AAPL": context},
+        )
+
+        assert signals[0].market_context is context
+        assert signals[0].features["gap_pct"] == 0.06
+        assert signals[0].reject_reason == "gap_pct_above_5pct"
+
+    def test_market_context_optional_and_acceptable_context_allows_buy(self, strategy_config):
+        gen = SignalGenerator(config=strategy_config)
+        sentiments = {
+            "AAPL": _make_sentiment("AAPL", avg_score=1.0, news_count=3, news_velocity=3.0),
+        }
+        market_data = {"AAPL": _make_bullish_ohlcv()}
+
+        signals = gen.evaluate(
+            sentiments,
+            market_data,
+            current_positions=set(),
+            market_contexts={"AAPL": _make_context(gap_pct=0.01, price_vs_vwap_pct=0.005)},
+        )
+
+        assert signals[0].action == "buy"
+        assert signals[0].reject_reason is None
+
+    def test_no_buy_if_gap_above_five_percent(self, strategy_config):
+        gen = SignalGenerator(config=strategy_config)
+        sentiments = {
+            "AAPL": _make_sentiment("AAPL", avg_score=1.0, news_count=3, news_velocity=3.0),
+        }
+        market_data = {"AAPL": _make_bullish_ohlcv()}
+
+        signals = gen.evaluate(
+            sentiments,
+            market_data,
+            current_positions=set(),
+            market_contexts={"AAPL": _make_context(gap_pct=0.051)},
+        )
+
+        assert signals[0].action == "hold"
+        assert signals[0].reject_reason == "gap_pct_above_5pct"
+
+    def test_no_buy_if_chasing_large_gap_near_day_high(self, strategy_config):
+        gen = SignalGenerator(config=strategy_config)
+        sentiments = {
+            "AAPL": _make_sentiment("AAPL", avg_score=1.0, news_count=3, news_velocity=3.0),
+        }
+        market_data = {"AAPL": _make_bullish_ohlcv()}
+
+        signals = gen.evaluate(
+            sentiments,
+            market_data,
+            current_positions=set(),
+            market_contexts={"AAPL": _make_context(gap_pct=0.031, day_range_pos=0.81)},
+        )
+
+        assert signals[0].action == "hold"
+        assert signals[0].reject_reason == "large_gap_near_day_high"
+
+    def test_no_buy_if_price_more_than_one_percent_above_vwap(self, strategy_config):
+        gen = SignalGenerator(config=strategy_config)
+        sentiments = {
+            "AAPL": _make_sentiment("AAPL", avg_score=1.0, news_count=3, news_velocity=3.0),
+        }
+        market_data = {"AAPL": _make_bullish_ohlcv()}
+
+        signals = gen.evaluate(
+            sentiments,
+            market_data,
+            current_positions=set(),
+            market_contexts={"AAPL": _make_context(price_vs_vwap_pct=0.011)},
+        )
+
+        assert signals[0].action == "hold"
+        assert signals[0].reject_reason == "price_above_vwap_chase"
+
+    def test_no_buy_if_positive_news_but_price_below_vwap(self, strategy_config):
+        gen = SignalGenerator(config=strategy_config)
+        sentiments = {
+            "AAPL": _make_sentiment("AAPL", avg_score=1.0, news_count=3, news_velocity=3.0),
+        }
+        market_data = {"AAPL": _make_bullish_ohlcv()}
+
+        signals = gen.evaluate(
+            sentiments,
+            market_data,
+            current_positions=set(),
+            market_contexts={"AAPL": _make_context(price_vs_vwap_pct=-0.002)},
+        )
+
+        assert signals[0].action == "hold"
+        assert signals[0].reject_reason == "positive_news_below_vwap"
