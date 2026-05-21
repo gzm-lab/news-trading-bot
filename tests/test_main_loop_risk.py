@@ -50,7 +50,7 @@ def bot(strategy_config):
     bot._aggregator = MagicMock()
     bot._aggregator.fetch_latest = AsyncMock(return_value=[MagicMock()])
     bot._scorer = MagicMock()
-    bot._scorer.score_news = AsyncMock(return_value={})
+    bot._scorer.score_news = AsyncMock(return_value={"MSFT": MagicMock()})
     bot._signal_gen = MagicMock()
     bot._risk_mgr = MagicMock()
     bot._broker = MagicMock()
@@ -105,6 +105,7 @@ async def test_run_cycle_persists_cycle_and_trade_logs(bot, tmp_db):
     bot._broker.get_account = AsyncMock(return_value=_account())
     bot._broker.close_position = AsyncMock()
     bot._broker.get_latest_price = AsyncMock(return_value=420.0)
+    bot._broker.get_bars = AsyncMock(return_value=MagicMock(empty=True))
     bot._broker.place_order = AsyncMock(return_value=placed_order)
     bot._risk_mgr.ensure_daily_baseline = MagicMock()
     bot._risk_mgr.update_daily_pnl = MagicMock()
@@ -130,6 +131,7 @@ async def test_run_cycle_persists_cycle_and_trade_logs(bot, tmp_db):
     assert trade.qty == 10
     assert trade.status == "pending_new"
     assert trade.reason == "test signal"
+    bot._broker.get_bars.assert_awaited_once_with("MSFT", timeframe="15Min", limit=50)
 
 
 @pytest.mark.asyncio

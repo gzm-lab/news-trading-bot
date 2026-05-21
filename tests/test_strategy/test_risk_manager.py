@@ -194,9 +194,9 @@ class TestFilterSignals:
         assert orders == []
 
     def test_max_positions_enforced(self, strategy_config):
-        # max_positions = 10
+        # max_positions = 5
         rm = RiskManager(config=strategy_config)
-        existing = [_make_position(f"TICK{i}") for i in range(10)]
+        existing = [_make_position(f"TICK{i}") for i in range(strategy_config.max_positions)]
         signals = [_make_signal("NEW", "buy")]
         account = _make_account()
 
@@ -226,7 +226,7 @@ class TestFilterSignals:
 
         assert len(orders) == 1
 
-    def test_multiple_signals_processed(self, strategy_config):
+    def test_multiple_signals_processed_until_order_limit(self, strategy_config):
         rm = RiskManager(config=strategy_config)
         signals = [
             _make_signal("AAPL", "buy", score=0.7),
@@ -236,7 +236,37 @@ class TestFilterSignals:
         account = _make_account()
 
         orders = rm.filter_signals(signals, account, [])
-        assert len(orders) == 3
+        assert len(orders) == strategy_config.max_orders_per_cycle
+
+    def test_max_buys_per_cycle_enforced(self, strategy_config):
+        rm = RiskManager(config=strategy_config)
+        signals = [
+            _make_signal("AAPL", "buy", score=0.7),
+            _make_signal("MSFT", "buy", score=0.6),
+            _make_signal("GOOGL", "buy", score=0.5),
+        ]
+
+        orders = rm.filter_signals(signals, _make_account(), [])
+
+        assert len([o for o in orders if o.side == OrderSide.BUY]) == strategy_config.max_buys_per_cycle
+
+    def test_approved_order_sets_cooldown(self, strategy_config):
+        rm = RiskManager(config=strategy_config)
+        orders = rm.filter_signals([_make_signal("AAPL", "buy")], _make_account(), [])
+
+        assert len(orders) == 1
+        assert "AAPL" in rm.state.cooldowns
+        assert rm.state.cooldowns["AAPL"] > datetime.now(UTC)
+
+    def test_cooldown_blocks_duplicate_next_cycle(self, strategy_config):
+        rm = RiskManager(config=strategy_config)
+        signal = _make_signal("AAPL", "buy")
+
+        first = rm.filter_signals([signal], _make_account(), [])
+        second = rm.filter_signals([signal], _make_account(), [])
+
+        assert len(first) == 1
+        assert second == []
 
 
 class TestCheckExits:

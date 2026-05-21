@@ -7,6 +7,7 @@ import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import pandas as pd
 import structlog
 
 from src.alerts.discord import DiscordAlerter
@@ -185,7 +186,8 @@ class TradingBot:
 
         positions = await self._broker.get_positions()
         current_position_tickers = {p.ticker for p in positions}
-        signals = self._signal_gen.evaluate(scores, {}, current_position_tickers)
+        market_data = await self._fetch_market_data(set(scores) | current_position_tickers)
+        signals = self._signal_gen.evaluate(scores, market_data, current_position_tickers)
 
         metrics = {"news": len(news_items), "signals": len(signals), "orders": 0, "exits": 0}
         if phase == "premarket":
@@ -278,6 +280,21 @@ class TradingBot:
             daily_pnl=daily_pnl,
         )
         return metrics
+
+    async def _fetch_market_data(self, tickers: set[str]) -> dict[str, pd.DataFrame]:
+        """Fetch recent bars for signal confirmation without failing the cycle."""
+        if self._broker is None or not tickers:
+            return {}
+
+        data: dict[str, pd.DataFrame] = {}
+        for ticker in sorted(tickers):
+            try:
+                bars = await self._broker.get_bars(ticker, timeframe="15Min", limit=50)
+                if bars is not None and not bars.empty:
+                    data[ticker] = bars
+            except Exception as e:
+                log.warning("bot.market_data_failed", ticker=ticker, error=str(e))
+        return data
 
     def _persist_trade(self, order, signal_score: float | None = None, reason: str = "") -> None:
         """Persist an order result to trade_log when database storage is available."""

@@ -128,3 +128,23 @@ class TestSentimentScorer:
 
         result = await scorer.score_news(news)
         assert "Headline to remember" in result["AAPL"].headlines
+
+    @pytest.mark.asyncio
+    async def test_duplicate_news_item_not_counted_twice(self, scorer, mock_analyzer):
+        news = [_make_news("Duplicate headline", ["AAPL"], score=0.7)]
+
+        first = await scorer.score_news(news)
+        second = await scorer.score_news(news)
+
+        assert first["AAPL"].news_count == 1
+        assert second == {}
+
+    @pytest.mark.asyncio
+    async def test_no_stale_signal_without_fresh_news(self, scorer, mock_analyzer):
+        news = [_make_news("Fresh headline", ["AAPL"], score=0.7)]
+
+        first = await scorer.score_news(news)
+        second = await scorer.score_news([])
+
+        assert "AAPL" in first
+        assert second == {}

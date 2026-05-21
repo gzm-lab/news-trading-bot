@@ -33,6 +33,20 @@ def _make_ohlcv(n=50):
     )
 
 
+def _make_bullish_ohlcv(n=50):
+    close = np.linspace(100.0, 130.0, n)
+    volume = np.concatenate([np.full(n - 1, 100_000.0), np.array([500_000.0])])
+    return pd.DataFrame(
+        {
+            "open": close - 0.2,
+            "high": close + 0.5,
+            "low": close - 0.5,
+            "close": close,
+            "volume": volume,
+        }
+    )
+
+
 class TestSignalGenerator:
     def test_no_sentiments_no_signals(self, strategy_config):
         gen = SignalGenerator(config=strategy_config)
@@ -42,9 +56,9 @@ class TestSignalGenerator:
     def test_strong_positive_generates_buy(self, strategy_config):
         gen = SignalGenerator(config=strategy_config)
         sentiments = {
-            "AAPL": _make_sentiment("AAPL", avg_score=0.9, news_velocity=5.0),
+            "AAPL": _make_sentiment("AAPL", avg_score=0.9, news_count=3, news_velocity=5.0),
         }
-        market_data = {"AAPL": _make_ohlcv()}
+        market_data = {"AAPL": _make_bullish_ohlcv()}
 
         signals = gen.evaluate(sentiments, market_data, current_positions=set())
 
@@ -56,7 +70,9 @@ class TestSignalGenerator:
     def test_strong_negative_generates_sell_if_holding(self, strategy_config):
         gen = SignalGenerator(config=strategy_config)
         sentiments = {
-            "TSLA": _make_sentiment("TSLA", avg_score=-0.8, news_velocity=4.0),
+            "TSLA": _make_sentiment(
+                "TSLA", avg_score=-0.9, news_velocity=0.0, latest_score=-0.9
+            ),
         }
         market_data = {"TSLA": _make_ohlcv()}
 
@@ -111,6 +127,53 @@ class TestSignalGenerator:
         signals = gen.evaluate(sentiments, market_data, current_positions=set())
         scores = [abs(s.score) for s in signals]
         assert scores == sorted(scores, reverse=True)
+
+
+    def test_strong_positive_without_market_data_holds(self, strategy_config):
+        gen = SignalGenerator(config=strategy_config)
+        sentiments = {
+            "AAPL": _make_sentiment("AAPL", avg_score=1.0, news_count=3, news_velocity=3.0),
+        }
+
+        signals = gen.evaluate(sentiments, {}, current_positions=set())
+
+        assert signals[0].action == "hold"
+        assert signals[0].technical_score == 0.0
+        assert signals[0].volume_score == 0.0
+
+    def test_single_article_does_not_buy_even_with_market_confirmation(self, strategy_config):
+        gen = SignalGenerator(config=strategy_config)
+        sentiments = {
+            "AAPL": _make_sentiment("AAPL", avg_score=1.0, news_count=1, news_velocity=1.0),
+        }
+        market_data = {"AAPL": _make_bullish_ohlcv()}
+
+        signals = gen.evaluate(sentiments, market_data, current_positions=set())
+
+        assert signals[0].action == "hold"
+
+    def test_positive_sentiment_with_market_confirmation_buys(self, strategy_config):
+        gen = SignalGenerator(config=strategy_config)
+        sentiments = {
+            "AAPL": _make_sentiment("AAPL", avg_score=1.0, news_count=3, news_velocity=3.0),
+        }
+        market_data = {"AAPL": _make_bullish_ohlcv()}
+
+        signals = gen.evaluate(sentiments, market_data, current_positions=set())
+
+        assert signals[0].technical_score >= 0.10 or signals[0].volume_score >= 0.20
+        assert signals[0].action == "buy"
+
+    def test_mild_negative_sentiment_does_not_sell(self, strategy_config):
+        gen = SignalGenerator(config=strategy_config)
+        sentiments = {
+            "AAPL": _make_sentiment("AAPL", avg_score=-0.4, news_count=3, news_velocity=1.0, latest_score=-0.2),
+        }
+        market_data = {"AAPL": _make_ohlcv()}
+
+        signals = gen.evaluate(sentiments, market_data, current_positions={"AAPL"})
+
+        assert signals[0].action == "hold"
 
     def test_signal_components_stored(self, strategy_config):
         gen = SignalGenerator(config=strategy_config)

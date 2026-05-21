@@ -84,8 +84,13 @@ class RiskManager:
         current_position_count = len(positions)
         now = datetime.now(UTC)
         cfg = self._config
+        buy_count = 0
 
         for signal in signals:
+            if len(orders) >= cfg.max_orders_per_cycle:
+                log.debug("risk.max_orders_per_cycle", ticker=signal.ticker)
+                break
+
             # Skip holds
             if signal.action == "hold":
                 continue
@@ -97,6 +102,10 @@ class RiskManager:
                     continue
 
             if signal.action == "buy":
+                if buy_count >= cfg.max_buys_per_cycle:
+                    log.debug("risk.max_buys_per_cycle", ticker=signal.ticker)
+                    continue
+
                 # Max positions check
                 if current_position_count >= cfg.max_positions:
                     log.debug("risk.max_positions", ticker=signal.ticker)
@@ -118,6 +127,8 @@ class RiskManager:
                 order._signal = signal  # type: ignore[attr-defined]
                 orders.append(order)
                 current_position_count += 1
+                buy_count += 1
+                self.state.cooldowns[signal.ticker] = now + timedelta(minutes=cfg.cooldown_minutes)
 
             elif signal.action == "sell":
                 order = Order(
@@ -128,6 +139,7 @@ class RiskManager:
                 )
                 order._signal = signal  # type: ignore[attr-defined]
                 orders.append(order)
+                self.state.cooldowns[signal.ticker] = now + timedelta(minutes=cfg.cooldown_minutes)
 
         log.info("risk.filtered", approved=len(orders))
         return orders

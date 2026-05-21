@@ -59,18 +59,20 @@ class StrategySettings(BaseSettings):
     w_volume: float = 0.15
 
     # Thresholds
-    buy_threshold: float = 0.15
-    sell_threshold: float = -0.1
+    buy_threshold: float = 0.35
+    sell_threshold: float = -0.35
 
     # Risk management
-    max_position_pct: float = 0.05  # 5% of portfolio per position
+    max_position_pct: float = 0.02  # 2% of portfolio per position while validating live signals
     stop_loss_pct: float = 0.02  # -2%
     trailing_stop_pct: float = 0.01  # -1% from observed high
     take_profit_pct: float = 0.04  # +4%
-    max_positions: int = 15  # Increased to track more of the universe
+    max_positions: int = 5
     max_daily_drawdown_pct: float = 0.05  # -5% -> stop trading
-    cooldown_minutes: int = 30
+    cooldown_minutes: int = 120
     blackout_minutes: int = 15
+    max_buys_per_cycle: int = 2
+    max_orders_per_cycle: int = 3
 
 
 class AlertSettings(BaseSettings):

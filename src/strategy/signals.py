@@ -55,8 +55,9 @@ class SignalGenerator:
         for ticker, sentiment in sentiments.items():
             # Technical component
             bars = market_data.get(ticker)
-            tech_score = compute_momentum_score(bars) if bars is not None else 0.0
-            vol_score = compute_volume_score(bars) if bars is not None else 0.0
+            has_market_data = bars is not None and not bars.empty
+            tech_score = compute_momentum_score(bars) if has_market_data else 0.0
+            vol_score = compute_volume_score(bars) if has_market_data else 0.0
 
             # Composite signal (weighted)
             composite = (
@@ -66,19 +67,34 @@ class SignalGenerator:
                 + cfg.w_volume * vol_score
             )
 
-            # Determine action
-            if composite > cfg.buy_threshold and ticker not in current_positions:
+            # Determine action. Be deliberately conservative: the bot previously
+            # traded almost entirely on LLM sentiment because market data was missing.
+            # Buys now need fresh news plus market confirmation; sells need a materially
+            # negative latest score, leaving stop-loss/trailing exits to the risk manager.
+            enough_news = sentiment.news_count >= 2 or sentiment.news_velocity >= 2
+            market_confirmed = has_market_data and (tech_score >= 0.10 or vol_score >= 0.20)
+            if (
+                composite > cfg.buy_threshold
+                and ticker not in current_positions
+                and enough_news
+                and market_confirmed
+            ):
                 action = "buy"
                 reason = (
                     f"Signal {composite:.3f} > {cfg.buy_threshold} | "
                     f"Sent={sentiment.avg_score:.2f} Tech={tech_score:.2f} "
                     f"Vol={vol_score:.2f} News={sentiment.news_count}"
                 )
-            elif composite < cfg.sell_threshold and ticker in current_positions:
+            elif (
+                composite < cfg.sell_threshold
+                and ticker in current_positions
+                and sentiment.latest_score <= cfg.sell_threshold
+            ):
                 action = "sell"
                 reason = (
                     f"Signal {composite:.3f} < {cfg.sell_threshold} | "
-                    f"Sent={sentiment.avg_score:.2f} Tech={tech_score:.2f}"
+                    f"Sent={sentiment.avg_score:.2f} Latest={sentiment.latest_score:.2f} "
+                    f"Tech={tech_score:.2f}"
                 )
             else:
                 action = "hold"

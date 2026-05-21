@@ -62,14 +62,18 @@ class TestStrategySettings:
 
     def test_thresholds(self):
         cfg = StrategySettings()
-        assert cfg.buy_threshold > 0
-        assert cfg.sell_threshold < 0
+        assert cfg.buy_threshold == pytest.approx(0.35)
+        assert cfg.sell_threshold == pytest.approx(-0.35)
 
     def test_risk_defaults(self):
         cfg = StrategySettings()
         assert cfg.stop_loss_pct > 0
         assert cfg.take_profit_pct > cfg.stop_loss_pct
-        assert cfg.max_positions > 0
+        assert cfg.max_position_pct == pytest.approx(0.02)
+        assert cfg.max_positions == 5
+        assert cfg.cooldown_minutes == 120
+        assert cfg.max_buys_per_cycle == 2
+        assert cfg.max_orders_per_cycle == 3
         assert cfg.max_daily_drawdown_pct > 0
 
 

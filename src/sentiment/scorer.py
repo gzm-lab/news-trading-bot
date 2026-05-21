@@ -33,6 +33,7 @@ class SentimentScorer:
         self._decay_minutes = decay_minutes
         # History: ticker -> list of (timestamp, score, headline)
         self._history: dict[str, list[tuple[datetime, float, str]]] = defaultdict(list)
+        self._seen_items: set[tuple[str, str, datetime]] = set()
 
     async def score_news(self, news_items: list[NewsItem]) -> dict[str, TickerSentiment]:
         """Analyze news items and return per-ticker aggregated sentiment."""
@@ -45,6 +46,10 @@ class SentimentScorer:
         for item in news_items:
             timestamp = item.published_at or item.fetched_at
             for ticker in item.tickers:
+                key = (ticker, item.title, timestamp)
+                if key in self._seen_items:
+                    continue
+                self._seen_items.add(key)
                 # Get the score from the LLM directly!
                 score = item.ticker_scores.get(ticker, 0.0)
                 ticker_scores[ticker].append((timestamp, score, item.title))
@@ -57,10 +62,13 @@ class SentimentScorer:
             cutoff = now - timedelta(minutes=self._decay_minutes * 3)
             self._history[ticker] = [(t, s, h) for t, s, h in self._history[ticker] if t > cutoff]
 
+        cutoff = now - timedelta(minutes=self._decay_minutes * 3)
+        self._seen_items = {key for key in self._seen_items if key[2] > cutoff}
+
         # Build aggregated sentiment per ticker
         result_map: dict[str, TickerSentiment] = {}
 
-        for ticker in set(list(ticker_scores.keys()) + list(self._history.keys())):
+        for ticker in set(ticker_scores.keys()):
             history = self._history.get(ticker, [])
             if not history:
                 continue
