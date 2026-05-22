@@ -21,7 +21,7 @@ from src.news.finnhub_source import FinnhubSource
 from src.news.rss_source import RSSSource
 from src.sentiment.scorer import SentimentScorer
 from src.storage.database import Database
-from src.storage.models import CycleLog, SignalLog, TradeLog
+from src.storage.models import CycleLog, PortfolioSnapshot, SignalLog, TradeLog
 from src.strategy.risk_manager import RiskManager
 from src.strategy.signals import SignalGenerator
 
@@ -312,6 +312,8 @@ class TradingBot:
         )
         portfolio_value = account.portfolio_value if phase != "premarket" else None
         daily_pnl = account.daily_pnl if phase != "premarket" else None
+        if phase != "premarket":
+            self._persist_portfolio_snapshot(account, positions)
         self._persist_cycle(
             metrics,
             duration_ms,
@@ -460,6 +462,23 @@ class TradingBot:
 
         log.info("bot.trade_sync.done", updated=len(updates))
         return len(updates)
+
+    def _persist_portfolio_snapshot(self, account, positions) -> None:
+        """Persist account equity/cash and current position count for performance tracking."""
+        if self._db is None:
+            return
+        try:
+            self._db.save(
+                PortfolioSnapshot(
+                    equity=account.equity,
+                    cash=account.cash,
+                    positions_count=len(positions or []),
+                    daily_pnl=account.daily_pnl,
+                    total_pnl=account.equity - 100_000.0,
+                )
+            )
+        except Exception as e:
+            log.warning("bot.portfolio_snapshot_failed", error=str(e))
 
     def _persist_cycle(
         self,

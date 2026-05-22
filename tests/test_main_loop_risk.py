@@ -11,7 +11,7 @@ import pytest
 from src.broker.interface import Account, Order, OrderSide, OrderStatus, OrderType, Position
 from src.main import TradingBot
 from src.market.context import MarketContext
-from src.storage.models import CycleLog, SignalLog, TradeLog
+from src.storage.models import CycleLog, PortfolioSnapshot, SignalLog, TradeLog
 from src.strategy.signals import Signal
 
 
@@ -277,10 +277,16 @@ async def test_run_cycle_persists_cycle_and_trade_logs(bot, tmp_db):
         cycle = session.query(CycleLog).one()
         trade = session.query(TradeLog).one()
         signal_log = session.query(SignalLog).one()
+        snapshot = session.query(PortfolioSnapshot).one()
     assert cycle.news_count == 1
     assert cycle.signals_generated == 1
     assert cycle.orders_placed == 1
     assert cycle.portfolio_value == 100_000.0
+    assert snapshot.equity == 100_000.0
+    assert snapshot.cash == 50_000.0
+    assert snapshot.positions_count == 0
+    assert snapshot.daily_pnl == 0.0
+    assert snapshot.total_pnl == 0.0
     assert trade.order_id == "order-1"
     assert trade.ticker == "MSFT"
     assert trade.side == "buy"
@@ -337,6 +343,8 @@ async def test_run_cycle_persists_hold_and_rejected_signal_logs_before_premarket
     assert rejected_features["market_context"]["day_range_pos"] == 0.9
     bot._broker.get_account.assert_not_called()
     bot._broker.place_order.assert_not_called()
+    with tmp_db.get_session() as session:
+        assert session.query(PortfolioSnapshot).count() == 0
 
 
 @pytest.mark.asyncio
