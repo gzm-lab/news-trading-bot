@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from src.sentiment.scorer import TickerSentiment
 from src.strategy.signals import SignalGenerator
@@ -342,3 +343,68 @@ class TestSignalGenerator:
 
         assert signals[0].action == "hold"
         assert signals[0].reject_reason == "positive_news_below_vwap"
+
+    def test_no_buy_in_market_risk_off_regime(self, strategy_config):
+        gen = SignalGenerator(config=strategy_config)
+        sentiments = {
+            "AAPL": _make_sentiment("AAPL", avg_score=1.0, news_count=3, news_velocity=3.0),
+        }
+        market_data = {"AAPL": _make_bullish_ohlcv()}
+
+        signals = gen.evaluate(
+            sentiments,
+            market_data,
+            current_positions=set(),
+            market_contexts={
+                "AAPL": _make_context(return_15m=0.01, return_60m=0.02),
+                "SPY": _make_context(ticker="SPY", return_60m=-0.008, price_vs_vwap_pct=-0.003),
+                "QQQ": _make_context(ticker="QQQ", return_60m=-0.010, price_vs_vwap_pct=-0.004),
+            },
+        )
+
+        assert signals[0].action == "hold"
+        assert signals[0].reject_reason == "market_regime_risk_off"
+        assert signals[0].features["market_regime"] == "risk_off"
+
+    def test_no_buy_if_relative_strength_is_weak(self, strategy_config):
+        gen = SignalGenerator(config=strategy_config)
+        sentiments = {
+            "AAPL": _make_sentiment("AAPL", avg_score=1.0, news_count=3, news_velocity=3.0),
+        }
+        market_data = {"AAPL": _make_bullish_ohlcv()}
+
+        signals = gen.evaluate(
+            sentiments,
+            market_data,
+            current_positions=set(),
+            market_contexts={
+                "AAPL": _make_context(return_15m=0.001, return_60m=0.002),
+                "QQQ": _make_context(ticker="QQQ", return_15m=0.006, return_60m=0.004),
+            },
+        )
+
+        assert signals[0].action == "hold"
+        assert signals[0].reject_reason == "weak_relative_strength_15m"
+        assert signals[0].features["relative_strength_15m"] == pytest.approx(-0.005)
+
+    def test_relative_strength_features_allow_market_confirmed_buy(self, strategy_config):
+        gen = SignalGenerator(config=strategy_config)
+        sentiments = {
+            "AAPL": _make_sentiment("AAPL", avg_score=1.0, news_count=3, news_velocity=3.0),
+        }
+        market_data = {"AAPL": _make_bullish_ohlcv()}
+
+        signals = gen.evaluate(
+            sentiments,
+            market_data,
+            current_positions=set(),
+            market_contexts={
+                "AAPL": _make_context(return_15m=0.012, return_60m=0.018, price_vs_vwap_pct=0.004),
+                "QQQ": _make_context(ticker="QQQ", return_15m=0.004, return_60m=0.006),
+                "VXX": _make_context(ticker="VXX", return_15m=-0.01, return_60m=-0.02),
+            },
+        )
+
+        assert signals[0].action == "buy"
+        assert signals[0].features["market_regime"] == "neutral_or_risk_on"
+        assert signals[0].features["relative_strength_15m"] == pytest.approx(0.008)

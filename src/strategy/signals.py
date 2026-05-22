@@ -57,6 +57,7 @@ class SignalGenerator:
         signals: list[Signal] = []
         cfg = self._config
         market_contexts = market_contexts or {}
+        market_regime = _market_regime_features(market_contexts)
 
         # Evaluate tickers that have sentiment data
         for ticker, sentiment in sentiments.items():
@@ -82,6 +83,8 @@ class SignalGenerator:
             market_confirmed = has_market_data and (tech_score >= 0.10 or vol_score >= 0.20)
             market_context = market_contexts.get(ticker)
             features = _context_features(market_context)
+            features.update(market_regime)
+            _add_relative_strength_features(features, market_regime)
             reject_reason = _market_context_reject_reason(sentiment, features)
             context_acceptable = reject_reason is None
             if (
@@ -95,7 +98,8 @@ class SignalGenerator:
                 reason = (
                     f"Signal {composite:.3f} > {cfg.buy_threshold} | "
                     f"Sent={sentiment.avg_score:.2f} Tech={tech_score:.2f} "
-                    f"Vol={vol_score:.2f} News={sentiment.news_count}"
+                    f"Vol={vol_score:.2f} RS15={_fmt_feature(features.get('relative_strength_15m'))} "
+                    f"Regime={features.get('market_regime', 'unknown')} News={sentiment.news_count}"
                 )
             elif (
                 composite < cfg.sell_threshold
@@ -176,6 +180,65 @@ def _context_features(market_context: Any | None) -> dict[str, Any]:
     }
 
 
+def _market_regime_features(market_contexts: dict[str, Any]) -> dict[str, Any]:
+    """Summarize broad-market context used to avoid fighting the tape."""
+    spy = _context_features(market_contexts.get("SPY"))
+    qqq = _context_features(market_contexts.get("QQQ"))
+    vxx = _context_features(market_contexts.get("VXX"))
+
+    spy_15m = _as_float(spy.get("return_15m"))
+    spy_60m = _as_float(spy.get("return_60m"))
+    qqq_15m = _as_float(qqq.get("return_15m"))
+    qqq_60m = _as_float(qqq.get("return_60m"))
+    vxx_15m = _as_float(vxx.get("return_15m"))
+    vxx_60m = _as_float(vxx.get("return_60m"))
+    spy_vwap = _as_float(spy.get("price_vs_vwap_pct"))
+    qqq_vwap = _as_float(qqq.get("price_vs_vwap_pct"))
+
+    risk_off = False
+    if spy_60m is not None and spy_60m < -0.007:
+        risk_off = True
+    if qqq_60m is not None and qqq_60m < -0.009:
+        risk_off = True
+    if spy_vwap is not None and qqq_vwap is not None and spy_vwap < -0.002 and qqq_vwap < -0.002:
+        risk_off = True
+    if vxx_15m is not None and vxx_15m > 0.018:
+        risk_off = True
+    if vxx_60m is not None and vxx_60m > 0.035:
+        risk_off = True
+
+    return {
+        "market_regime": "risk_off" if risk_off else "neutral_or_risk_on",
+        "market_risk_off": risk_off,
+        "spy_return_15m": spy_15m,
+        "spy_return_60m": spy_60m,
+        "qqq_return_15m": qqq_15m,
+        "qqq_return_60m": qqq_60m,
+        "vxx_return_15m": vxx_15m,
+        "vxx_return_60m": vxx_60m,
+        "spy_price_vs_vwap_pct": spy_vwap,
+        "qqq_price_vs_vwap_pct": qqq_vwap,
+    }
+
+
+def _add_relative_strength_features(features: dict[str, Any], market_regime: dict[str, Any]) -> None:
+    """Add ticker-vs-market return spreads to a signal feature dict."""
+    ret_15m = _as_float(features.get("return_15m"))
+    ret_60m = _as_float(features.get("return_60m"))
+    benchmark_15m = _first_not_none(
+        market_regime.get("qqq_return_15m"), market_regime.get("spy_return_15m")
+    )
+    benchmark_60m = _first_not_none(
+        market_regime.get("qqq_return_60m"), market_regime.get("spy_return_60m")
+    )
+    features["relative_strength_15m"] = (
+        ret_15m - benchmark_15m if ret_15m is not None and benchmark_15m is not None else None
+    )
+    features["relative_strength_60m"] = (
+        ret_60m - benchmark_60m if ret_60m is not None and benchmark_60m is not None else None
+    )
+
+
 def _market_context_reject_reason(
     sentiment: TickerSentiment, features: dict[str, Any]
 ) -> str | None:
@@ -186,7 +249,15 @@ def _market_context_reject_reason(
     gap_pct = _as_float(features.get("gap_pct"))
     day_range_pos = _as_float(features.get("day_range_pos"))
     price_vs_vwap_pct = _as_float(features.get("price_vs_vwap_pct"))
+    relative_strength_15m = _as_float(features.get("relative_strength_15m"))
+    relative_strength_60m = _as_float(features.get("relative_strength_60m"))
 
+    if features.get("market_risk_off") is True:
+        return "market_regime_risk_off"
+    if relative_strength_15m is not None and relative_strength_15m < -0.0025:
+        return "weak_relative_strength_15m"
+    if relative_strength_60m is not None and relative_strength_60m < -0.004:
+        return "weak_relative_strength_60m"
     if gap_pct is not None and gap_pct > 0.05:
         return "gap_pct_above_5pct"
     if (
@@ -202,6 +273,20 @@ def _market_context_reject_reason(
         return "positive_news_below_vwap"
 
     return None
+
+
+def _first_not_none(*values: Any) -> Any | None:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _fmt_feature(value: Any) -> str:
+    number = _as_float(value)
+    if number is None:
+        return "NA"
+    return f"{number:.3f}"
 
 
 def _as_float(value: Any) -> float | None:

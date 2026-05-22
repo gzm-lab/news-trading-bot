@@ -157,11 +157,25 @@ class RiskManager:
                     log.debug("risk.max_positions", ticker=signal.ticker)
                     continue
 
-                # Position sizing: max X% of portfolio
+                # Position sizing: cap notional, then optionally tighten by ATR stop distance.
                 max_value = account.equity * cfg.max_position_pct
                 # We need a price to calculate qty — use buying power as sanity check
                 if max_value > account.buying_power:
                     max_value = account.buying_power * 0.95  # 5% buffer
+
+                features = getattr(signal, "features", {}) or {}
+                entry_price = _as_positive_float(features.get("last_price"))
+                atr = _as_positive_float(features.get("atr_14"))
+                risk_qty = None
+                if entry_price is not None and atr is not None and cfg.atr_stop_mult > 0:
+                    stop_price = entry_price - (atr * cfg.atr_stop_mult)
+                    risk_qty = calculate_risk_position_size(
+                        equity=account.equity,
+                        entry_price=entry_price,
+                        stop_price=stop_price,
+                        risk_pct=cfg.risk_per_trade_pct,
+                        max_notional=max_value,
+                    )
 
                 order = Order(
                     ticker=signal.ticker,
@@ -170,6 +184,7 @@ class RiskManager:
                     order_type=OrderType.LIMIT,
                 )
                 order._max_value = max_value  # type: ignore[attr-defined]
+                order._risk_qty = risk_qty  # type: ignore[attr-defined]
                 order._signal = signal  # type: ignore[attr-defined]
                 orders.append(order)
                 current_position_count += 1
@@ -251,3 +266,11 @@ class RiskManager:
             log.info("risk.exits", tickers=exits)
 
         return exits
+
+
+def _as_positive_float(value) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result > 0 else None

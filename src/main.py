@@ -217,7 +217,8 @@ class TradingBot:
 
         positions = await self._broker.get_positions()
         current_position_tickers = {p.ticker for p in positions}
-        candidate_tickers = set(scores) | current_position_tickers
+        benchmark_tickers = {"SPY", "QQQ", "VXX"}
+        candidate_tickers = set(scores) | current_position_tickers | benchmark_tickers
         market_data = await self._fetch_market_data(candidate_tickers)
         market_contexts = await self._fetch_market_contexts(candidate_tickers)
         signals = self._signal_gen.evaluate(
@@ -268,7 +269,12 @@ class TradingBot:
             if order.side.value == "buy" and hasattr(order, "_max_value"):
                 price = await self._broker.get_latest_price(order.ticker)
                 if price > 0:
-                    order.qty = int(order._max_value / price)
+                    max_value_qty = int(order._max_value / price)
+                    risk_qty = getattr(order, "_risk_qty", None)
+                    if risk_qty is not None and risk_qty > 0:
+                        order.qty = min(max_value_qty, int(risk_qty))
+                    else:
+                        order.qty = max_value_qty
                     if order.order_type.value == "limit":
                         order.limit_price = round(price * 1.002, 2)
                 if order.qty <= 0:

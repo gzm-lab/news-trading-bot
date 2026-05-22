@@ -209,7 +209,7 @@ async def test_run_cycle_context_failure_for_one_ticker_does_not_break_cycle(bot
     assert metrics == {"news": 1, "signals": 0, "orders": 0, "exits": 0}
     bot._signal_gen.evaluate.assert_called_once()
     _, kwargs = bot._signal_gen.evaluate.call_args
-    assert set(kwargs["market_contexts"]) == {"MSFT"}
+    assert {"MSFT", "SPY", "QQQ", "VXX"}.issubset(set(kwargs["market_contexts"]))
 
 
 @pytest.mark.asyncio
@@ -258,11 +258,17 @@ async def test_run_cycle_persists_cycle_and_trade_logs(bot, tmp_db):
     bot._broker.close_position = AsyncMock()
     bot._broker.get_latest_price = AsyncMock(return_value=420.0)
     bot._broker.get_bars = AsyncMock(return_value=MagicMock(empty=True))
-    bot._broker.place_order = AsyncMock(return_value=placed_order)
+    async def place_order(order):
+        placed_order.qty = order.qty
+        return placed_order
+
+    bot._broker.place_order = AsyncMock(side_effect=place_order)
     bot._risk_mgr.ensure_daily_baseline = MagicMock()
     bot._risk_mgr.update_daily_pnl = MagicMock()
     bot._risk_mgr.check_exits = MagicMock(return_value=[])
     order = Order(ticker="MSFT", side=OrderSide.BUY, qty=10, order_type=OrderType.LIMIT)
+    order._max_value = 10_000.0
+    order._risk_qty = 3
     buy_signal = _signal("MSFT", "buy")
     buy_signal.features = {"custom_feature": 123}
     buy_signal.market_context = _market_context("MSFT")
@@ -290,7 +296,7 @@ async def test_run_cycle_persists_cycle_and_trade_logs(bot, tmp_db):
     assert trade.order_id == "order-1"
     assert trade.ticker == "MSFT"
     assert trade.side == "buy"
-    assert trade.qty == 10
+    assert trade.qty == 3
     assert trade.status == "pending_new"
     assert trade.reason == "test signal"
     assert signal_log.ticker == "MSFT"

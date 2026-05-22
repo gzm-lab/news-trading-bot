@@ -220,7 +220,29 @@ class TestFilterSignals:
         assert getattr(orders[0], "_max_value") == pytest.approx(
             account.equity * strategy_config.max_position_pct
         )
+        assert getattr(orders[0], "_risk_qty") is None
         assert getattr(orders[0], "_signal") is signals[0]
+
+    def test_atr_features_attach_risk_limited_quantity(self, strategy_config):
+        rm = RiskManager(config=strategy_config)
+        signal = _make_signal("AAPL", "buy", score=0.7)
+        signal.features = {"last_price": 100.0, "atr_14": 20.0}
+
+        orders = rm.filter_signals([signal], _make_account(equity=100_000), [])
+
+        assert len(orders) == 1
+        assert getattr(orders[0], "_max_value") == pytest.approx(2_000.0)
+        assert getattr(orders[0], "_risk_qty") == 12
+
+    def test_atr_sizing_cannot_exceed_notional_cap(self, strategy_config):
+        rm = RiskManager(config=strategy_config)
+        signal = _make_signal("AAPL", "buy", score=0.7)
+        signal.features = {"last_price": 100.0, "atr_14": 0.5}
+
+        orders = rm.filter_signals([signal], _make_account(equity=100_000), [])
+
+        assert len(orders) == 1
+        assert getattr(orders[0], "_risk_qty") == 20
 
     def test_sell_signal_creates_order(self, strategy_config):
         rm = RiskManager(config=strategy_config)
