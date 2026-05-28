@@ -161,6 +161,7 @@ class TradingBot:
             api_key=cfg.broker.api_key,
             secret_key=cfg.broker.secret_key,
             paper="paper" in cfg.broker.base_url,
+            data_feed=cfg.broker.data_feed,
         )
         await self._broker.connect()
 
@@ -253,6 +254,7 @@ class TradingBot:
                 if result:
                     await self._alerter.notify_trade(result, reason="risk exit")
                     metrics["exits"] += 1
+                    self._persist_trade(result, signal_score=None, reason="risk exit")
             except Exception as e:
                 log.error("bot.exit_failed", ticker=ticker, error=str(e))
 

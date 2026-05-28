@@ -45,7 +45,7 @@ def _daily_df() -> pd.DataFrame:
                 "volume": 1_000_000.0,
             }
         )
-    # Previous daily close used by context; also participates in ATR.
+    # Previous completed daily close used by gap math; also participates in ATR.
     rows.append(
         {
             "timestamp": start + pd.Timedelta(days=15),
@@ -53,6 +53,17 @@ def _daily_df() -> pd.DataFrame:
             "high": 103.0,
             "low": 98.0,
             "close": 100.0,
+            "volume": 1_000_000.0,
+        }
+    )
+    # Current in-progress day should not be treated as previous close.
+    rows.append(
+        {
+            "timestamp": start + pd.Timedelta(days=16),
+            "open": 100.5,
+            "high": 114.0,
+            "low": 99.0,
+            "close": 112.0,
             "volume": 1_000_000.0,
         }
     )

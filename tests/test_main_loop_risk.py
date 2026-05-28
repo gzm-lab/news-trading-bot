@@ -168,7 +168,7 @@ async def test_run_cycle_passes_computed_market_contexts_to_signal_generator(bot
     assert isinstance(context, MarketContext)
     assert context.ticker == "MSFT"
     assert context.last_price == 470.0
-    assert context.prev_close == 400.0
+    assert context.prev_close == 398.0
     assert context.today_open == 410.0
     assert context.day_high == 471.0
     assert context.day_low == 409.0
@@ -239,6 +239,41 @@ async def test_run_cycle_closes_risk_exits_before_orders(bot):
     bot._broker.close_position.assert_awaited_once_with("AAPL")
     bot._broker.place_order.assert_not_called()
     bot._alerter.notify_trade.assert_awaited_once_with(close_result, reason="risk exit")
+
+
+@pytest.mark.asyncio
+async def test_run_cycle_persists_risk_exit_trade(bot, tmp_db):
+    close_result = Order(
+        ticker="AAPL",
+        side=OrderSide.SELL,
+        qty=10,
+        order_type=OrderType.MARKET,
+        id="close-1",
+        status=OrderStatus.FILLED,
+        filled_price=97.0,
+    )
+    bot._db = tmp_db
+    bot._broker.get_positions = AsyncMock(side_effect=[[_position("AAPL", -0.03)], []])
+    bot._broker.get_account = AsyncMock(return_value=_account())
+    bot._broker.close_position = AsyncMock(return_value=close_result)
+    bot._broker.place_order = AsyncMock()
+    bot._risk_mgr.ensure_daily_baseline = MagicMock()
+    bot._risk_mgr.update_daily_pnl = MagicMock()
+    bot._risk_mgr.check_exits = MagicMock(return_value=["AAPL"])
+    bot._risk_mgr.filter_signals = MagicMock(return_value=[])
+    bot._signal_gen.evaluate.return_value = []
+
+    metrics = await bot._run_cycle(phase="open")
+
+    assert metrics["exits"] == 1
+    with tmp_db.get_session() as session:
+        trade = session.query(TradeLog).one()
+    assert trade.order_id == "close-1"
+    assert trade.ticker == "AAPL"
+    assert trade.side == "sell"
+    assert trade.status == "filled"
+    assert trade.filled_price == 97.0
+    assert trade.reason == "risk exit"
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
+from alpaca.data.enums import DataFeed
 from alpaca.data.timeframe import TimeFrameUnit
 from alpaca.trading.enums import OrderSide as AlpacaOrderSide
 
@@ -203,6 +204,36 @@ class TestAlpacaBrokerOrder:
         mock_client.cancel_order_by_id.assert_not_called()
         mock_client.submit_order.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_close_position_maps_canceled_status(self, broker):
+        mock_alpaca_order = MagicMock()
+        mock_alpaca_order.id = "close-1"
+        mock_alpaca_order.symbol = "AAPL"
+        mock_alpaca_order.side.value = "sell"
+        mock_alpaca_order.type.value = "market"
+        mock_alpaca_order.qty = "6"
+        mock_alpaca_order.limit_price = None
+        mock_alpaca_order.status.value = "canceled"
+        mock_alpaca_order.filled_avg_price = None
+        mock_alpaca_order.filled_at = None
+
+        with (
+            patch("src.broker.alpaca_broker.TradingClient") as mock_tc,
+            patch("src.broker.alpaca_broker.StockHistoricalDataClient"),
+        ):
+            mock_client = MagicMock()
+            mock_tc.return_value = mock_client
+            mock_client.close_position.return_value = mock_alpaca_order
+
+            await broker.connect()
+            result = await broker.close_position("AAPL")
+
+        assert result is not None
+        assert result.id == "close-1"
+        assert result.side == OrderSide.SELL
+        assert result.qty == 6
+        assert result.status == OrderStatus.CANCELED
+
 
 class TestAlpacaBrokerBars:
     @pytest.mark.asyncio
@@ -223,6 +254,7 @@ class TestAlpacaBrokerBars:
         assert request.timeframe.amount == 15
         assert request.timeframe.unit == TimeFrameUnit.Minute
         assert str(request.timeframe) == "15Min"
+        assert request.feed == DataFeed.IEX
 
 
 class TestAlpacaBrokerLatestPrice:
@@ -263,6 +295,8 @@ class TestAlpacaBrokerLatestPrice:
             price = await broker.get_latest_price("AAPL")
 
         assert price == 101.0
+        request = mock_data_client.get_stock_latest_quote.call_args.args[0]
+        assert request.feed == DataFeed.IEX
 
     @pytest.mark.asyncio
     async def test_latest_price_returns_zero_when_ticker_missing(self, broker):

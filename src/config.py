@@ -20,6 +20,7 @@ class BrokerSettings(BaseSettings):
     secret_key: str = ""
     base_url: str = "https://paper-api.alpaca.markets"
     data_url: str = "https://data.alpaca.markets"
+    data_feed: str = "iex"  # Free Alpaca plans need IEX; default SIP queries return empty/403.
 
 
 class NewsSettings(BaseSettings):

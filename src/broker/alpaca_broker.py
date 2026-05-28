@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 import structlog
+from alpaca.common.enums import Sort
+from alpaca.data.enums import DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
@@ -30,10 +33,17 @@ log = structlog.get_logger()
 class AlpacaBroker(BrokerInterface):
     """Alpaca Markets broker — paper and live trading."""
 
-    def __init__(self, api_key: str, secret_key: str, paper: bool = True):
+    def __init__(
+        self,
+        api_key: str,
+        secret_key: str,
+        paper: bool = True,
+        data_feed: str | DataFeed | None = "iex",
+    ):
         self._api_key = api_key
         self._secret_key = secret_key
         self._paper = paper
+        self._data_feed = _normalize_data_feed(data_feed)
         self._trading_client: TradingClient | None = None
         self._data_client: StockHistoricalDataClient | None = None
 
@@ -205,17 +215,13 @@ class AlpacaBroker(BrokerInterface):
         assert self._trading_client is not None
         try:
             raw = await asyncio.to_thread(self._trading_client.close_position, ticker)
-            return Order(
+            fallback = Order(
                 ticker=ticker,
                 side=OrderSide.SELL,
-                qty=int(raw.qty) if hasattr(raw, "qty") else 0,
+                qty=0,
                 order_type=OrderType.MARKET,
-                id=str(raw.id),
-                status=OrderStatus(raw.status.value)
-                if hasattr(raw.status, "value")
-                else OrderStatus.PENDING,
-                filled_price=float(raw.filled_avg_price) if raw.filled_avg_price else None,
             )
+            return self._order_from_raw(raw, fallback=fallback)
         except Exception as e:
             log.warning("alpaca.close_position_failed", ticker=ticker, error=str(e))
             return None
@@ -238,6 +244,10 @@ class AlpacaBroker(BrokerInterface):
             symbol_or_symbols=ticker,
             timeframe=tf,
             limit=limit,
+            start=_bars_start_for_timeframe(timeframe, limit),
+            end=datetime.now(UTC),
+            sort=Sort.DESC,
+            feed=self._data_feed,
         )
         raw = await asyncio.to_thread(self._data_client.get_stock_bars, request)
         if not raw or not hasattr(raw, "data") or ticker not in raw.data:
@@ -258,11 +268,14 @@ class AlpacaBroker(BrokerInterface):
                 }
             )
 
-        return pd.DataFrame(data)
+        df = pd.DataFrame(data)
+        if "timestamp" in df.columns:
+            df = df.sort_values("timestamp").reset_index(drop=True)
+        return df
 
     async def get_latest_price(self, ticker: str) -> float:
         assert self._data_client is not None
-        request = StockLatestQuoteRequest(symbol_or_symbols=ticker)
+        request = StockLatestQuoteRequest(symbol_or_symbols=ticker, feed=self._data_feed)
         try:
             raw = await asyncio.to_thread(self._data_client.get_stock_latest_quote, request)
             quote = raw.get(ticker) if hasattr(raw, "get") else raw[ticker]
@@ -279,3 +292,32 @@ class AlpacaBroker(BrokerInterface):
         assert self._trading_client is not None
         clock = await asyncio.to_thread(self._trading_client.get_clock)
         return clock.is_open
+
+
+def _normalize_data_feed(feed: str | DataFeed | None) -> DataFeed | None:
+    """Return an Alpaca DataFeed enum, defaulting safely for free paper accounts."""
+    if feed is None or isinstance(feed, DataFeed):
+        return feed
+    value = str(feed).strip().lower()
+    if value in {"", "none", "default"}:
+        return None
+    try:
+        return DataFeed(value)
+    except ValueError:
+        log.warning("alpaca.unknown_data_feed", feed=feed, fallback=DataFeed.IEX.value)
+        return DataFeed.IEX
+
+
+def _bars_start_for_timeframe(timeframe: str, limit: int) -> datetime:
+    """Alpaca recent bar queries need an explicit time window on free IEX data."""
+    now = datetime.now(UTC)
+    if timeframe == "1Day":
+        # Include weekends/holidays so `limit=30` still gets enough trading sessions.
+        return now - timedelta(days=max(45, limit * 3))
+    if timeframe == "1Hour":
+        return now - timedelta(days=max(10, limit // 3))
+    if timeframe == "15Min":
+        return now - timedelta(days=max(5, limit // 12))
+    if timeframe in {"1Min", "5Min"}:
+        return now - timedelta(days=5)
+    return now - timedelta(days=10)

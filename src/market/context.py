@@ -48,7 +48,10 @@ def compute_market_context(
 
     prev_close = None
     if not daily.empty:
-        prev_close = _finite_float(daily["close"].iloc[-1])
+        # Daily bars include the current in-progress trading day during market hours;
+        # gap math needs the previous completed close when available.
+        prev_close_idx = -2 if len(daily) >= 2 else -1
+        prev_close = _finite_float(daily["close"].iloc[prev_close_idx])
 
     today_open = day_high = day_low = session_vwap = None
     if not intraday.empty:
